@@ -9,15 +9,22 @@ from src.config import load_config
 
 
 def test_simulated_mode_switches_default_ws_urls(tmp_path):
+    secret_path = tmp_path / "secret.yaml"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         """
 mode: live
 exchange:
-  simulated: true
   api_key: demo_key
   secret_key: demo_secret
   passphrase: demo_pass
+""".strip(),
+        encoding="utf-8",
+    )
+    secret_path.write_text(
+        """
+exchange:
+  simulated: true
 """.strip(),
         encoding="utf-8",
     )
@@ -156,7 +163,6 @@ def test_load_config_reads_exchange_secrets_from_secret_yaml(tmp_path):
         """
 mode: live
 exchange:
-  simulated: true
   api_key: ""
   secret_key: ""
   passphrase: ""
@@ -169,6 +175,7 @@ exchange:
   api_key: secret_key_from_file
   secret_key: secret_secret_from_file
   passphrase: secret_pass_from_file
+  simulated: true
 """.strip(),
         encoding="utf-8",
     )
@@ -178,6 +185,7 @@ exchange:
     assert config.exchange.api_key == "secret_key_from_file"
     assert config.exchange.secret_key == "secret_secret_from_file"
     assert config.exchange.passphrase == "secret_pass_from_file"
+    assert config.exchange.simulated is True
 
 
 def test_load_config_reads_binance_secrets_from_secret_binance_yaml(tmp_path):

@@ -8,7 +8,6 @@ exchange:
   api_key: ""
   secret_key: ""
   passphrase: ""
-  simulated: true
   request_timeout_seconds: 15
   user_agent: trend_bot_6/0.1
 
