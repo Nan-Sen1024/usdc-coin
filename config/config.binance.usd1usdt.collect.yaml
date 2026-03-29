@@ -1,39 +1,39 @@
 mode: live
-managed_prefix: bintusdc
+managed_prefix: binusd1x
 
 exchange:
   name: binance
-  binance_env: testnet
+  binance_env: mainnet
   api_key: ""
   secret_key: ""
   simulated: false
-  request_timeout_seconds: 10
+  request_timeout_seconds: 15
   user_agent: trend_bot_6/0.1
 
 trading:
-  inst_id: USDC-USDT
+  inst_id: USD1-USDT
   inst_type: SPOT
-  base_ccy: USDC
+  base_ccy: USD1
   quote_ccy: USDT
-  budget_base_total: 0
+  budget_base_total: 500
   budget_quote_total: 0
-  entry_base_size: 1000
+  entry_base_size: 500
   post_only: true
-  quote_size: 1000
-  min_quote_size: 100
-  max_quote_size: 1000
+  quote_size: 500
+  min_quote_size: 50
+  max_quote_size: 500
   loop_interval_seconds: 1.0
-  balance_poll_interval_seconds: 10.0
+  balance_poll_interval_seconds: 20.0
   order_ttl_seconds: 6.0
   cancel_on_ttl_expiry: false
   action_cooldown_seconds: 0.2
   same_price_amend_min_remaining_change_ratio: 0.10
-  same_price_amend_min_remaining_change_base: 100
+  same_price_amend_min_remaining_change_base: 20
   event_driven_requote: true
   book_requote_debounce_ms: 120
   bootstrap_depth: 5
-  shadow_base_balance: 10000
-  shadow_quote_balance: 10000
+  shadow_base_balance: 500
+  shadow_quote_balance: 500
 
 strategy:
   min_spread_ticks: 1
@@ -41,9 +41,13 @@ strategy:
   inventory_target_pct: 0.50
   inventory_soft_lower_pct: 0.45
   inventory_soft_upper_pct: 0.55
-  account_inventory_skew_enabled: true
+  release_only_mode: true
+  release_only_base_buffer: 0
+  release_only_shared_state_paths: []
+  release_only_shared_inventory_min_base: 999999
+  release_only_shared_inventory_min_improvement_bp: 999999
   mild_skew_threshold_pct: 0.02
-  mild_skew_size_factor: 1.00
+  mild_skew_size_factor: 0.70
   visible_depth_levels: 5
   min_visible_depth_multiplier: 3
   rebalance_min_profit_ticks: 1
@@ -54,24 +58,13 @@ strategy:
   rebalance_release_depth_fraction: 0.10
   rebalance_release_depth_step_bonus: 0.05
   secondary_layers_enabled: false
-  rebalance_secondary_size_factor: 0.25
+  rebalance_secondary_size_factor: 0.10
   secondary_min_positive_edge_ticks: 1
   secondary_full_size_edge_ticks: 2
   secondary_thin_edge_size_factor: 0.10
   secondary_entry_layer_min_edge_ticks: 4
   rebalance_overlay_preserve_tolerance_ticks: 1
   rebalance_secondary_price_offset_ticks: 0
-  rebalance_profit_density_enabled: true
-  rebalance_profit_density_window_minutes: 60
-  rebalance_profit_density_soft_per10k: 0.08
-  rebalance_profit_density_hard_per10k: 0.03
-  rebalance_profit_density_soft_size_factor: 0.90
-  rebalance_profit_density_hard_size_factor: 0.70
-  rebalance_profit_density_soft_extra_ticks: 1
-  rebalance_profit_density_hard_extra_ticks: 2
-  sell_drought_guard_enabled: true
-  sell_drought_inventory_ratio_pct: 0.58
-  sell_drought_rebalance_window_seconds: 900
   toxic_flow_min_observation_ms: 300
   toxic_flow_max_observation_ms: 1000
   toxic_flow_adverse_ticks: 1
@@ -89,8 +82,8 @@ strategy:
   toxicity_severe_size_factor: 0.25
   toxicity_severe_extra_edge_ticks: 1
   toxicity_disable_second_entry_layer: true
-  favorable_size_spread_ticks: 2
-  favorable_size_multiplier: 1.5
+  favorable_size_spread_ticks: 1
+  favorable_size_multiplier: 1
   normal_buy_price_cap: 0
   normal_sell_price_floor: 0
   preserve_entry_queue: true
@@ -100,16 +93,16 @@ risk:
   stale_book_ms: 15000
   cancel_orders_on_stale_book: false
   max_reconnects_per_5m: 3
-  realized_loss_shutdown_quote: 20
-  min_free_quote_buffer: 100
-  min_free_base_buffer: 100
+  realized_loss_shutdown_quote: 10
+  min_free_quote_buffer: 0
+  min_free_base_buffer: 0
   fail_on_foreign_pending_orders: true
   cancel_managed_orders_on_startup: true
   cancel_managed_orders_on_shutdown: true
   cancel_managed_orders_on_public_reconnect: false
   allow_emergency_ioc: false
-  hard_inventory_lower_pct: 0.38
-  hard_inventory_upper_pct: 0.62
+  hard_inventory_lower_pct: 0.00
+  hard_inventory_upper_pct: 1.00
   pause_after_reconnect_seconds: 2
   max_mid_deviation_bps: 20
   peg_reference_price: 1
@@ -122,13 +115,13 @@ risk:
   require_public_stream_ready: true
   require_private_stream_ready: true
   enforce_effective_fee_gate: true
-  max_effective_maker_fee_rate: 0.001
-  max_effective_taker_fee_rate: 0.001
+  max_effective_maker_fee_rate: 0
+  max_effective_taker_fee_rate: 0
   live_allowed_instruments:
-    - USDC-USDT
+    - USD1-USDT
   observe_only_instruments: []
   simulated_rest_trade_instruments: []
-  max_managed_orders_per_side: 2
+  max_managed_orders_per_side: 1
   max_consistency_failures: 3
   cancel_managed_on_consistency_failure: true
   balance_consistency_tolerance_quote: 1
@@ -142,11 +135,11 @@ shadow:
   fill_on_book_cross: true
 
 telemetry:
-  journal_path: trend_bot_6/data/binance_usdc_testnet/journal.jsonl
+  journal_path: trend_bot_6/data/binance_usd1usdt_collect/journal.jsonl
   sqlite_enabled: true
-  sqlite_path: trend_bot_6/data/binance_usdc_testnet/audit.db
-  state_path: trend_bot_6/data/binance_usdc_testnet/state_snapshot.json
-  stop_request_path: trend_bot_6/data/binance_usdc_testnet/stop.request
+  sqlite_path: trend_bot_6/data/binance_usd1usdt_collect/audit.db
+  state_path: trend_bot_6/data/binance_usd1usdt_collect/state_snapshot.json
+  stop_request_path: trend_bot_6/data/binance_usd1usdt_collect/stop.request
   snapshot_interval_seconds: 30
   status_panel_enabled: true
   status_panel_interval_seconds: 1.0

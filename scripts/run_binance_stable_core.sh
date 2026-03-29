@@ -7,7 +7,8 @@ USDC_CONFIG="${USDC_CONFIG:-$ROOT_DIR/config/config.binance.usdc.mainnet.yaml}"
 USD1_USDT_CONFIG="${USD1_USDT_CONFIG:-$ROOT_DIR/config/config.binance.usd1usdt.mainnet.yaml}"
 USD1_USDC_CONFIG="${USD1_USDC_CONFIG:-$ROOT_DIR/config/config.binance.usd1usdc.mainnet.yaml}"
 OBS_QUOTE_SIZE="${OBS_QUOTE_SIZE:-5000}"
-START_USD1_USDC="${START_USD1_USDC:-1}"
+START_USD1_USDT="${START_USD1_USDT:-0}"
+START_USD1_USDC="${START_USD1_USDC:-0}"
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
 
 resolve_python_cmd() {
@@ -73,11 +74,16 @@ nohup "${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
   > "$LOG_DIR/binance_usdc_mainnet.out" 2>&1 &
 USDC_PID=$!
 
-echo "[3/4] Start USD1-USDT secondary engine"
-nohup "${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
-  --config "$USD1_USDT_CONFIG" \
-  > "$LOG_DIR/binance_usd1usdt_mainnet.out" 2>&1 &
-USD1_USDT_PID=$!
+USD1_USDT_PID=""
+if [[ "$START_USD1_USDT" == "1" ]]; then
+  echo "[3/4] Start USD1-USDT secondary engine"
+  nohup "${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
+    --config "$USD1_USDT_CONFIG" \
+    > "$LOG_DIR/binance_usd1usdt_mainnet.out" 2>&1 &
+  USD1_USDT_PID=$!
+else
+  echo "[3/4] Skip USD1-USDT secondary engine (set START_USD1_USDT=1 to enable it again)"
+fi
 
 USD1_USDC_PID=""
 if [[ "$START_USD1_USDC" == "1" ]]; then
@@ -92,8 +98,12 @@ fi
 
 echo "Started Binance stable-core instances"
 echo "  USDC-USDT pid: $USDC_PID log: $LOG_DIR/binance_usdc_mainnet.out"
-echo "  USD1-USDT pid: $USD1_USDT_PID log: $LOG_DIR/binance_usd1usdt_mainnet.out"
-if [[ -n "$USD1_USDC_PID" ]]; then
+if [[ -n "$USD1_USDT_PID" ]]; then
+  echo "  USD1-USDT pid: $USD1_USDT_PID log: $LOG_DIR/binance_usd1usdt_mainnet.out"
+else
+  echo "  USD1-USDT pid: skipped"
+fi
+if [[ -n "${USD1_USDC_PID:-}" ]]; then
   echo "  USD1-USDC pid: $USD1_USDC_PID log: $LOG_DIR/binance_usd1usdc_mainnet.out"
 else
   echo "  USD1-USDC pid: skipped"

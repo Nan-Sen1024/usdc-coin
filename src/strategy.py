@@ -137,6 +137,11 @@ class MicroMakerStrategy:
         ask = None
         bid_toxic_cooldown = state.is_toxic_flow_side_cooling_down("buy")
         ask_toxic_cooldown = state.is_toxic_flow_side_cooling_down("sell")
+        buy_drought_guard_active = self._buy_drought_guard_active(
+            state=state,
+            inventory_ratio=inventory_ratio,
+            rebalance_buy_base=rebalance_buy_base,
+        )
         suppress_direct_sell_for_route = rebalance_sell_base > 0 and self._triangle_prefers_indirect_sell(state=state)
         if risk_status.allow_bid and not suppress_direct_sell_for_route:
             if rebalance_buy_base > 0:
@@ -220,7 +225,7 @@ class MicroMakerStrategy:
                     rebalance_mode=rebalance_mode,
                     inventory_repair_steps=inventory_repair_steps,
                 )
-            elif not ask_toxic_cooldown and rebalance_buy_base <= 0:
+            elif not ask_toxic_cooldown and rebalance_buy_base <= 0 and not buy_drought_guard_active:
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=ask_base_size,
@@ -254,7 +259,10 @@ class MicroMakerStrategy:
             elif rebalance_sell_base > 0:
                 reason = "fill_rebalance_sell_biased"
         elif bid and not ask:
-            reason = "fill_rebalance_buy_only" if rebalance_buy_base > 0 else "inventory_low_bid_only"
+            if buy_drought_guard_active:
+                reason = "buy_drought_rebalance_buy_only" if rebalance_buy_base > 0 else "buy_drought_bid_only"
+            else:
+                reason = "fill_rebalance_buy_only" if rebalance_buy_base > 0 else "inventory_low_bid_only"
         elif ask and not bid:
             if sell_drought_guard_active:
                 reason = "sell_drought_rebalance_sell_only" if rebalance_sell_base > 0 else "sell_drought_ask_only"
@@ -515,6 +523,34 @@ class MicroMakerStrategy:
         if not self.config.entry_profit_density_enabled:
             return Decimal("1")
         return min(max(state.entry_profit_density_size_factor, Decimal("0")), Decimal("1"))
+
+    def _buy_drought_guard_active(
+        self,
+        *,
+        state: BotState,
+        inventory_ratio: Decimal | None,
+        rebalance_buy_base: Decimal,
+    ) -> bool:
+        if not self.config.sell_drought_guard_enabled:
+            return False
+        if rebalance_buy_base <= 0:
+            return False
+        if state.strategy_position_base() >= 0:
+            return False
+        low_inventory_threshold = Decimal("1") - self.config.sell_drought_inventory_ratio_pct
+        if inventory_ratio is None or inventory_ratio > low_inventory_threshold:
+            return False
+        window_ms = int(max(self.config.sell_drought_rebalance_window_seconds, 0) * 1000)
+        if window_ms <= 0:
+            return False
+        fill_age_ms = state.managed_fill_age_ms(
+            side="buy",
+            reason_bucket="rebalance",
+            reference_ms=now_ms(),
+        )
+        if fill_age_ms is None:
+            return False
+        return fill_age_ms >= window_ms
 
     def _sell_drought_guard_active(
         self,

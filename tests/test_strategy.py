@@ -1191,6 +1191,54 @@ def test_strategy_starts_reducing_ask_after_crossing_soft_lower_band():
     assert decision.reason == "two_sided"
 
 
+def test_strategy_can_fully_suppress_ask_when_account_inventory_is_too_low():
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            account_inventory_skew_enabled=True,
+            inventory_soft_lower_pct=Decimal("0.45"),
+            inventory_soft_upper_pct=Decimal("0.55"),
+            mild_skew_threshold_pct=Decimal("0.02"),
+            mild_skew_size_factor=Decimal("1"),
+        ),
+        TradingConfig(),
+    )
+
+    decision = strategy.decide(
+        build_state("42000", "58000"),
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is not None
+    assert decision.ask is not None
+    assert decision.bid.quote_notional == Decimal("10000")
+    assert decision.ask.quote_notional == Decimal("0")
+    assert decision.reason == "two_sided"
+
+
+def test_strategy_can_fully_suppress_bid_when_account_inventory_is_too_high():
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            account_inventory_skew_enabled=True,
+            inventory_soft_lower_pct=Decimal("0.45"),
+            inventory_soft_upper_pct=Decimal("0.55"),
+            mild_skew_threshold_pct=Decimal("0.02"),
+            mild_skew_size_factor=Decimal("1"),
+        ),
+        TradingConfig(),
+    )
+
+    decision = strategy.decide(
+        build_state("58000", "42000"),
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is not None
+    assert decision.ask is not None
+    assert decision.bid.quote_notional == Decimal("0")
+    assert decision.ask.quote_notional == Decimal("10000")
+    assert decision.reason == "two_sided"
+
+
 def test_strategy_still_uses_price_skew_when_spread_exceeds_one_tick():
     strategy = MicroMakerStrategy(StrategyConfig(account_inventory_skew_enabled=True), TradingConfig())
     state = build_state("70000", "30000")
@@ -3176,3 +3224,65 @@ def test_strategy_sell_drought_guard_does_not_block_recent_rebalance_sell(monkey
     assert decision.bid is not None
     assert decision.bid.reason == "join_best_bid"
     assert decision.ask is not None
+
+
+def test_strategy_buy_drought_guard_suppresses_entry_sell_and_keeps_rebalance_buy(monkeypatch):
+    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_000_061_000)
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+            sell_drought_guard_enabled=True,
+            sell_drought_inventory_ratio_pct=Decimal("0.58"),
+            sell_drought_rebalance_window_seconds=60,
+        ),
+        TradingConfig(entry_base_size=Decimal("1000"), quote_size=Decimal("1000")),
+    )
+    state = build_state("7000", "18000")
+
+    buy_id = build_cl_ord_id("bot6", "buy")
+    state.set_order_reason(cl_ord_id=buy_id, reason="rebalance_open_short")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "b1",
+            "clOrdId": buy_id,
+            "px": "1.0001",
+            "fillPx": "1.0001",
+            "sz": "1000",
+            "accFillSz": "1000",
+            "state": "filled",
+            "cTime": "1700000001000",
+            "uTime": "1700000001000",
+        },
+        source="test",
+    )
+
+    sell_id = build_cl_ord_id("bot6", "sell")
+    state.set_order_reason(cl_ord_id=sell_id, reason="join_best_ask")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "sell",
+            "ordId": "s1",
+            "clOrdId": sell_id,
+            "px": "1.0001",
+            "fillPx": "1.0001",
+            "sz": "2000",
+            "accFillSz": "2000",
+            "state": "filled",
+            "cTime": "1700000002000",
+            "uTime": "1700000002000",
+        },
+        source="test",
+    )
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is not None
+    assert decision.bid.reason == "rebalance_open_short"
+    assert decision.ask is None
+    assert decision.reason == "buy_drought_rebalance_buy_only"

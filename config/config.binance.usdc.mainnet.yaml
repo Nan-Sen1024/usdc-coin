@@ -41,7 +41,7 @@ strategy:
   inventory_target_pct: 0.50
   inventory_soft_lower_pct: 0.45
   inventory_soft_upper_pct: 0.55
-  triangle_routing_enabled: true
+  triangle_routing_enabled: false
   triangle_route_refresh_interval_seconds: 5
   triangle_snapshot_stale_ms: 30000
   triangle_strict_dual_exit_edge_bp: 0.15
@@ -52,8 +52,9 @@ strategy:
   triangle_indirect_handoff_enabled: false
   triangle_direct_sell_floor_enabled: true
   triangle_direct_buy_ceiling_enabled: true
+  account_inventory_skew_enabled: true
   mild_skew_threshold_pct: 0.02
-  mild_skew_size_factor: 0.70
+  mild_skew_size_factor: 1.00
   visible_depth_levels: 5
   min_visible_depth_multiplier: 3
   rebalance_min_profit_ticks: 1
@@ -71,6 +72,17 @@ strategy:
   secondary_entry_layer_min_edge_ticks: 4
   rebalance_overlay_preserve_tolerance_ticks: 1
   rebalance_secondary_price_offset_ticks: 0
+  rebalance_profit_density_enabled: true
+  rebalance_profit_density_window_minutes: 60
+  rebalance_profit_density_soft_per10k: 0.08
+  rebalance_profit_density_hard_per10k: 0.03
+  rebalance_profit_density_soft_size_factor: 0.90
+  rebalance_profit_density_hard_size_factor: 0.70
+  rebalance_profit_density_soft_extra_ticks: 1
+  rebalance_profit_density_hard_extra_ticks: 2
+  sell_drought_guard_enabled: true
+  sell_drought_inventory_ratio_pct: 0.58
+  sell_drought_rebalance_window_seconds: 900
   toxic_flow_min_observation_ms: 300
   toxic_flow_max_observation_ms: 1000
   toxic_flow_adverse_ticks: 1
@@ -107,8 +119,8 @@ risk:
   cancel_managed_orders_on_shutdown: true
   cancel_managed_orders_on_public_reconnect: false
   allow_emergency_ioc: false
-  hard_inventory_lower_pct: 0.30
-  hard_inventory_upper_pct: 0.70
+  hard_inventory_lower_pct: 0.38
+  hard_inventory_upper_pct: 0.62
   pause_after_reconnect_seconds: 2
   max_mid_deviation_bps: 20
   peg_reference_price: 1
