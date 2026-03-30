@@ -413,6 +413,61 @@ def test_release_bot_writes_route_ledger_event_on_release_fill(tmp_path):
     assert record["payload"]["fill_size"] == "250"
 
 
+def test_release_only_bot_stops_when_inventory_is_fully_collected(tmp_path):
+    config = BotConfig(mode="live")
+    config.exchange.name = "binance"
+    config.trading.inst_id = "USD1-USDT"
+    config.trading.base_ccy = "USD1"
+    config.trading.quote_ccy = "USDT"
+    config.strategy.release_only_mode = True
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+
+    bot = TrendBot6(config)
+    bot.journal = StubJournal()
+    bot.state.set_instrument(
+        InstrumentMeta(
+            inst_id="USD1-USDT",
+            inst_type="SPOT",
+            base_ccy="USD1",
+            quote_ccy="USDT",
+            tick_size=Decimal("0.0001"),
+            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
+            max_market_amount=Decimal("1000000"),
+            max_limit_amount=Decimal("20000000"),
+        )
+    )
+    bot.state.set_balances(
+        {
+            "USD1": Balance(ccy="USD1", total=Decimal("0"), available=Decimal("0")),
+            "USDT": Balance(ccy="USDT", total=Decimal("1000"), available=Decimal("1000")),
+        }
+    )
+    bot.state.initial_external_base_inventory = Decimal("410")
+    bot.state.external_base_inventory_remaining = Decimal("0")
+
+    try:
+        stopped = bot._maybe_stop_completed_release_only_run()
+    finally:
+        bot.audit_store.close()
+
+    assert stopped is True
+    assert bot.state.runtime_state == "STOPPED"
+    assert bot.state.runtime_reason == "release inventory fully collected"
+    assert (
+        "release_only_completed",
+        {
+            "inst_id": "USD1-USDT",
+            "base_ccy": "USD1",
+            "remaining_base": Decimal("0"),
+            "strategy_position_base": Decimal("0"),
+        },
+    ) in bot.journal.events
+
+
 def test_bot_consumes_route_ledger_and_reduces_matching_long_inventory(tmp_path):
     config = BotConfig(mode="live")
     config.exchange.name = "binance"

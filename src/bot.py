@@ -292,6 +292,8 @@ class TrendBot6:
                 self._refresh_shared_release_inventory()
                 self._consume_route_ledger_events()
                 await self._maybe_resync()
+                if self._maybe_stop_completed_release_only_run():
+                    return
             self.state.clear_pause_if_elapsed()
             self._refresh_triangle_exit_route_choice()
             self._refresh_triangle_route_diagnostics()
@@ -318,6 +320,33 @@ class TrendBot6:
             if include_maintenance and loop_ms - self._last_snapshot_ms >= int(self.config.telemetry.snapshot_interval_seconds * 1000):
                 self.state.persist()
                 self._last_snapshot_ms = loop_ms
+
+    def _maybe_stop_completed_release_only_run(self) -> bool:
+        if not self.config.strategy.release_only_mode:
+            return False
+        instrument = self.state.instrument
+        if instrument is None:
+            return False
+        if self.state.bot_orders():
+            return False
+        if self.state.strategy_position_base() >= instrument.min_size:
+            return False
+        if self.state.total_balance(instrument.base_ccy) >= instrument.min_size:
+            return False
+        if self.state.external_base_inventory_remaining >= instrument.min_size:
+            return False
+        reason = "release inventory fully collected"
+        self.journal.append(
+            "release_only_completed",
+            {
+                "inst_id": self.config.trading.inst_id,
+                "base_ccy": instrument.base_ccy,
+                "remaining_base": self.state.external_base_inventory_remaining,
+                "strategy_position_base": self.state.strategy_position_base(),
+            },
+        )
+        self.state.set_runtime_state("STOPPED", reason)
+        return True
 
     async def _refresh_balances_if_due(self) -> None:
         if self.config.mode != "live":

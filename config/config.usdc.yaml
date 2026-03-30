@@ -62,11 +62,11 @@ strategy:
   rebalance_overlay_preserve_tolerance_ticks: 1
   rebalance_secondary_price_offset_ticks: 0
   entry_profit_density_enabled: true
-  entry_profit_density_window_minutes: 60
-  entry_profit_density_soft_per10k: 0.15
-  entry_profit_density_hard_per10k: 0.05
-  entry_profit_density_soft_size_factor: 0.70
-  entry_profit_density_hard_size_factor: 0.40
+  entry_profit_density_window_minutes: 30
+  entry_profit_density_soft_per10k: 0.20
+  entry_profit_density_hard_per10k: 0.08
+  entry_profit_density_soft_size_factor: 0.55
+  entry_profit_density_hard_size_factor: 0.25
   rebalance_profit_density_enabled: true
   rebalance_profit_density_window_minutes: 60
   rebalance_profit_density_soft_per10k: 0.08
