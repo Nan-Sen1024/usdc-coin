@@ -71,10 +71,14 @@ class BinanceAPIError(ExchangeAPIError):
 
 
 class BinanceRestClient:
+    SIGNED_RECV_WINDOW_MS = 15000
+    TIME_SYNC_REFRESH_MS = 15000
+
     def __init__(self, config: ExchangeConfig):
         self.config = config
         self.signer = BinanceSigner(config.api_key, config.secret_key)
         self.time_offset_ms = 0
+        self.last_time_sync_ms = now_ms()
         self.client = httpx.AsyncClient(
             base_url=config.rest_url,
             timeout=config.request_timeout_seconds,
@@ -89,6 +93,7 @@ class BinanceRestClient:
         server_ms = int(payload["serverTime"])
         local_ms = int(time.time() * 1000)
         self.time_offset_ms = server_ms - local_ms
+        self.last_time_sync_ms = now_ms()
 
     async def _request(
         self,
@@ -105,9 +110,11 @@ class BinanceRestClient:
         if signed or api_key_only:
             headers.update(self.signer.api_key_headers())
         if signed:
+            if self.last_time_sync_ms > 0 and now_ms() - self.last_time_sync_ms >= self.TIME_SYNC_REFRESH_MS:
+                await self.sync_time_offset()
             signed_params = dict(params)
             signed_params.setdefault("timestamp", str(now_ms() + self.time_offset_ms))
-            signed_params.setdefault("recvWindow", "5000")
+            signed_params.setdefault("recvWindow", str(self.SIGNED_RECV_WINDOW_MS))
             query = self.signer.sign_query(signed_params)
             request_params = None
             request_url = f"{path}?{query}"

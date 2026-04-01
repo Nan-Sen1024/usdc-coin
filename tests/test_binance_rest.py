@@ -119,6 +119,37 @@ def test_binance_rest_fetch_balances_retries_after_timestamp_drift():
     assert requests == ["/api/v3/account", "/api/v3/time", "/api/v3/account"]
 
 
+def test_binance_rest_refreshes_stale_time_offset_before_signed_request():
+    requests: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((str(request.url.path), str(request.url.query)))
+        if request.url.path == "/api/v3/time":
+            return httpx.Response(200, json={"serverTime": int(time.time() * 1000) + 1200})
+        if request.url.path == "/api/v3/account":
+            return httpx.Response(
+                200,
+                json={"balances": [{"asset": "USDC", "free": "12.5", "locked": "0.5"}]},
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    async def run():
+        client = BinanceRestClient(ExchangeConfig(name="binance", api_key="k", secret_key="s"))
+        client.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.binance.com")
+        client.time_offset_ms = 250
+        client.last_time_sync_ms -= client.TIME_SYNC_REFRESH_MS + 1
+        try:
+            return await client.fetch_balances(["USDC"])
+        finally:
+            await client.close()
+
+    balances = asyncio.run(run())
+    assert balances["USDC"].total == Decimal("13.0")
+    assert requests[0][0] == "/api/v3/time"
+    assert requests[1][0] == "/api/v3/account"
+    assert "recvWindow=15000" in requests[1][1]
+
+
 def test_binance_rest_fetch_best_bid_ask_uses_book_ticker_endpoint():
     payload = {
         "symbol": "USDCUSDT",

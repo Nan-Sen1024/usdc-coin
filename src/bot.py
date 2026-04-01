@@ -130,6 +130,8 @@ class TrendBot6:
                             "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
                         },
                     )
+                    if self._stop_for_binance_restricted_location(source="tick", exc=exc):
+                        continue
                     self.state.request_resync(f"tick failure: {error_message}")
                     self.state.set_pause(
                         reason=f"tick failure: {error_message}",
@@ -1191,6 +1193,7 @@ class TrendBot6:
                 "error": str(exc),
             },
         )
+        self._stop_for_binance_restricted_location(source=f"stream:{stream_name}", exc=exc)
 
     async def _on_stream_activity(self, stream_name: str, activity: str) -> None:
         del activity
@@ -1198,6 +1201,29 @@ class TrendBot6:
 
     def _exchange_ms_to_local_ms(self, exchange_ms: int) -> int:
         return int(exchange_ms - self.rest.time_offset_ms)
+
+    def _is_binance_restricted_location_error(self, exc: Exception) -> bool:
+        if self.config.exchange.name != "binance":
+            return False
+        status_code = getattr(exc, "status_code", None)
+        if status_code == 451:
+            return True
+        message = " ".join(part for part in (str(exc), repr(exc)) if part).lower()
+        return "restricted location" in message or "eligibility" in message or "http 451" in message
+
+    def _stop_for_binance_restricted_location(self, *, source: str, exc: Exception) -> bool:
+        if not self._is_binance_restricted_location_error(exc):
+            return False
+        self.state.set_runtime_state("STOPPED", "binance restricted location")
+        self.journal.append(
+            "exchange_restricted_stop",
+            {
+                "source": source,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        return True
 
     async def _on_reconnect(self, stream_name: str) -> None:
         if self.state.runtime_state == "STOPPED":

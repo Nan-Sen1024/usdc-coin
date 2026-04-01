@@ -784,6 +784,51 @@ def test_strategy_scales_down_entry_when_profit_density_is_weak():
     assert decision.ask.base_size == Decimal("4000")
 
 
+def test_strategy_blocks_entry_buy_when_profit_density_is_hard_weak_under_rebalance_sell_pressure():
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+            entry_profit_density_enabled=True,
+            entry_profit_density_soft_per10k=Decimal("0.15"),
+            entry_profit_density_hard_per10k=Decimal("0.05"),
+            entry_profit_density_soft_size_factor=Decimal("0.70"),
+            entry_profit_density_hard_size_factor=Decimal("0.40"),
+        ),
+        TradingConfig(entry_base_size=Decimal("10000")),
+    )
+    state = build_state("50000", "50000")
+    cl_ord_id = build_cl_ord_id("bot6", "buy")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "1",
+            "clOrdId": cl_ord_id,
+            "px": "1",
+            "fillPx": "1",
+            "sz": "10000",
+            "accFillSz": "10000",
+            "state": "filled",
+            "cTime": "1",
+            "uTime": "2",
+        },
+        source="test",
+    )
+    state.entry_profit_density_per10k = Decimal("0.04")
+    state.entry_profit_density_size_factor = Decimal("0.40")
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is None
+    assert decision.ask is not None
+    assert decision.ask.reason == "rebalance_open_long"
+    assert decision.ask.base_size == Decimal("10000")
+    assert decision.reason == "fill_rebalance_sell_only"
+
+
 def test_strategy_keeps_entry_size_when_profit_density_is_healthy():
     strategy = MicroMakerStrategy(
         StrategyConfig(
@@ -2446,6 +2491,93 @@ def test_strategy_release_sell_only_uses_excess_inventory_chunk(monkeypatch):
     assert decision.ask.base_size == Decimal("407.775")
     assert decision.ask.price == Decimal("1.0001")
     assert decision.reason == "fill_rebalance_sell_only"
+
+
+def test_strategy_sell_drought_release_sell_adds_one_extra_negative_tick(monkeypatch):
+    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_001_800_000)
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+            sell_drought_guard_enabled=True,
+            sell_drought_inventory_ratio_pct=Decimal("0.60"),
+            sell_drought_rebalance_window_seconds=1800,
+            rebalance_min_profit_ticks=1,
+            rebalance_reload_timeout_seconds=120,
+            rebalance_max_order_age_seconds=12,
+            rebalance_release_excess_only=True,
+            rebalance_release_max_negative_ticks=1,
+            rebalance_release_depth_levels=1,
+            rebalance_release_depth_fraction=Decimal("0.10"),
+            rebalance_release_depth_step_bonus=Decimal("0.05"),
+        ),
+        TradingConfig(entry_base_size=Decimal("2000"), quote_size=Decimal("2000"), order_ttl_seconds=6),
+    )
+    state = build_state("14747.3273", "9252.6727")
+    state.set_book(
+        BookSnapshot(
+            ts_ms=1,
+            bids=[BookLevel(price=Decimal("1.0004"), size=Decimal("100000"))],
+            asks=[BookLevel(price=Decimal("1.0005"), size=Decimal("100000"))],
+        )
+    )
+
+    buy_id = build_cl_ord_id("bot6", "buy")
+    state.set_order_reason(cl_ord_id=buy_id, reason="join_best_bid")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "b1",
+            "clOrdId": buy_id,
+            "px": "1.0005",
+            "fillPx": "1.0005",
+            "sz": "2846.24231",
+            "accFillSz": "2846.24231",
+            "state": "filled",
+            "cTime": "1699998150000",
+            "uTime": "1699998150000",
+        },
+        source="test",
+    )
+
+    sell_id = build_cl_ord_id("bot6", "sell")
+    state.set_order_reason(cl_ord_id=sell_id, reason="rebalance_open_long")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "sell",
+            "ordId": "s1",
+            "clOrdId": sell_id,
+            "px": "1.0004",
+            "fillPx": "1.0004",
+            "sz": "100",
+            "accFillSz": "100",
+            "state": "filled",
+            "cTime": "1699998140000",
+            "uTime": "1699998140000",
+        },
+        source="test",
+    )
+
+    state.set_book(
+        BookSnapshot(
+            ts_ms=2,
+            bids=[BookLevel(price=Decimal("1.0002"), size=Decimal("100000"))],
+            asks=[BookLevel(price=Decimal("1.0003"), size=Decimal("100000"))],
+        )
+    )
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is None
+    assert decision.ask is not None
+    assert decision.ask.reason == "rebalance_open_long"
+    assert decision.ask.price == Decimal("1.0003")
+    assert decision.ask.base_size == Decimal("746.24231")
+    assert decision.reason == "sell_drought_rebalance_sell_only"
 
 
 def test_strategy_release_sell_respects_thin_bid_depth_budget(monkeypatch):

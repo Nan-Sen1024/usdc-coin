@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.bot import TrendBot6
 from src.binance_private_stream import BinancePrivateUserStream
 from src.binance_market_data import BinancePublicMarketStream
+from src.exchange_errors import ExchangeAPIError
 from src.binance_rest import BinanceRestClient
 from src.config import BotConfig
 from src.models import Balance, InstrumentMeta
@@ -466,6 +467,63 @@ def test_release_only_bot_stops_when_inventory_is_fully_collected(tmp_path):
             "strategy_position_base": Decimal("0"),
         },
     ) in bot.journal.events
+
+
+def test_bot_stops_on_restricted_location_stream_error(tmp_path):
+    config = BotConfig(mode="live")
+    config.exchange.name = "binance"
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+
+    bot = TrendBot6(config)
+    bot.journal = StubJournal()
+
+    try:
+        asyncio.run(bot._on_stream_error("public_books5", RuntimeError("server rejected WebSocket connection: HTTP 451")))
+    finally:
+        bot.audit_store.close()
+
+    assert bot.state.runtime_state == "STOPPED"
+    assert bot.state.runtime_reason == "binance restricted location"
+    assert any(event == "exchange_restricted_stop" for event, _ in bot.journal.events)
+
+
+def test_bot_run_stops_on_restricted_location_tick_error(tmp_path):
+    config = BotConfig(mode="live")
+    config.exchange.name = "binance"
+    config.risk.cancel_managed_orders_on_shutdown = False
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+
+    bot = TrendBot6(config)
+    bot.journal = StubJournal()
+
+    async def fake_bootstrap() -> None:
+        bot.state.set_runtime_state("READY", "bootstrapped")
+
+    async def fake_tick() -> None:
+        raise ExchangeAPIError(
+            path="/api/v3/account",
+            msg="Service unavailable from a restricted location according to 'b. Eligibility'",
+            status_code=451,
+        )
+
+    bot._bootstrap = fake_bootstrap  # type: ignore[method-assign]
+    bot._tick = fake_tick  # type: ignore[method-assign]
+
+    try:
+        asyncio.run(bot.run())
+    finally:
+        bot.audit_store.close()
+
+    assert bot.state.runtime_state == "STOPPED"
+    assert bot.state.runtime_reason == "binance restricted location"
+    assert any(event == "tick_error" for event, _ in bot.journal.events)
+    assert any(event == "exchange_restricted_stop" for event, _ in bot.journal.events)
 
 
 def test_bot_consumes_route_ledger_and_reduces_matching_long_inventory(tmp_path):

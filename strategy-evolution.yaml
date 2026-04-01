@@ -1,0 +1,254 @@
+target:
+  strategy_scope: okx_usdc_usdt
+  primary_metric: realized_per_10k_turnover
+  current_value: 0.09956740149593398855137188518
+  target_value: null
+  optimize_direction: maximize
+  secondary_metrics:
+    - realized_pnl_quote
+    - turnover_quote
+    - rebalance_release_ratio
+    - paused_runtime_share
+
+constraints:
+  max_drawdown: null
+  min_trade_count: 20
+  include_fees: true
+  include_slippage: true
+  include_funding: false
+  include_borrow: false
+  allow_leverage_change: false
+  allow_live_capital_increase: false
+
+autonomy:
+  mode: auto_continue
+  ask_each_round: false
+  summary_trigger:
+    type: milestone
+    every_n_experiments: 1
+    jitter_minutes: 0
+
+diagnosis:
+  as_of: 2026-04-01
+  data_sources:
+    local_state_snapshot: trend_bot_6/data/usdc/state_snapshot.sim.json
+    local_journal: trend_bot_6/data/usdc/journal.sim.jsonl
+    local_latest_run_id: 20260331T141729869161Z
+    live_project_root: /opt/app/usdc-coin
+    live_state_snapshot: trend_bot_6/data/usdc/state_snapshot.live.json
+    live_journal: trend_bot_6/data/usdc/journal.live.jsonl
+    live_process: python main.py --config config/config.usdc.yaml --mode live
+  cumulative_observation:
+    realized_pnl_quote: 48.0708629632
+    observed_fill_count: 2495
+    observed_fill_volume_quote: 1770528.7145846279
+    realized_per_10k_turnover: 0.2715094763772653695277854662
+  sim_latest_run:
+    events: 4104
+    runtime_paused_events: 3508
+    runtime_quoting_events: 459
+    public_reconnects: 68
+    public_stream_errors: 95
+    place_order_counts:
+      join_best_bid: 30
+      rebalance_open_long: 3
+    fill_summary:
+      entry_buy_fills: 27
+      entry_buy_turnover_quote: 5186.1551678444
+      entry_buy_realized_pnl_quote: 0
+      entry_buy_realized_per_10k: 0
+      rebalance_sell_fills: 2
+      rebalance_sell_turnover_quote: 3853.2017567386
+      rebalance_sell_realized_pnl_quote: 0.09
+      rebalance_sell_realized_per_10k: 0.2335719894308809010639180676
+  live_current:
+    runtime_state: QUOTING
+    runtime_reason: sell_drought_rebalance_sell_only
+    live_realized_pnl_quote: 0.9952445582
+    live_unrealized_pnl_quote: -0.6865605775
+    live_total_pnl_quote: 0.3086839807
+    strategy_position_base: 2746.24231
+    inventory_ratio: 0.6144719695016632547273875417
+    observed_fill_count: 95
+    observed_fill_volume_quote: 74581.7770501256
+    entry_profit_density_per10k: null
+    entry_profit_density_size_factor: 1
+    rebalance_profit_density_per10k: null
+    rebalance_profit_density_size_factor: 1
+    rebalance_profit_density_extra_ticks: 0
+    book_best_bid: 1.0002
+    book_best_ask: 1.0003
+    latest_audit_ts_utc: 2026-04-01T13:14:31.731000+00:00
+    last_fill_ts_utc: 2026-04-01T09:14:19.287000+00:00
+    last_amend_ts_utc: 2026-04-01T09:14:19.288000+00:00
+    no_fill_gap_hours: 4.003456666666667
+    no_amend_gap_hours: 4.003456388888889
+    current_live_order:
+      side: sell
+      reason: rebalance_open_long
+      price: 1.0004
+      size: 777.255596
+      filled_size: 31.013286
+      remaining_size: 746.24231
+    fill_events_total:
+      entry: 67
+      rebalance: 28
+    profitability_windows:
+      lifetime_realized_per_10k: 0.1334433956341784364805282846
+      last_24h:
+        fill_count: 26
+        turnover_quote: 28882.6750033578
+        realized_pnl_quote: 0.4358104260
+        realized_per_10k: 0.1508899109758130733017428220
+      last_6h:
+        fill_count: 4
+        turnover_quote: 631.3256913144
+        realized_pnl_quote: -0.0031013286
+        realized_per_10k: -0.04912406769860945373052652747
+    reason_bucket_profitability:
+      entry:
+        turnover_quote: 43167.2285526965
+        realized_pnl_quote: 0.4500000000
+        realized_per_10k: 0.1042457473151563106861693813
+      rebalance:
+        turnover_quote: 31414.5484974291
+        realized_pnl_quote: 0.5452445582
+        realized_per_10k: 0.1735643465461939259937353537
+    active_code_gap:
+      remote_has_entry_density_hard_block: false
+      remote_has_new_regression_test: false
+      remote_has_drought_extra_negative_tick: false
+  primary_bottleneck: live_rebalance_release_price_floor_binding_above_market
+  primary_bottleneck_evidence:
+    - live runtime has stayed in sell_drought_rebalance_sell_only while inventory_ratio remains above the 0.60 drought threshold
+    - recent live decision rows repeatedly target ask_price 1.0004 and ask_size 746.24231 with reason rebalance_open_long
+    - current snapshot shows best_ask 1.0003 while the only live managed sell order is still parked at 1.0004 with remaining_size 746.24231
+    - the last amend and the last fill on that managed sell order both happened about 4.00 hours before the latest audit event, so the order is not turning over
+    - recent live profitability has deteriorated: last 6h realized_pnl_quote is -0.0031013286 and realized_per_10k is -0.04912406769860945373052652747
+    - profit-density signals are null because the configured lookback windows contain zero recent fill turnover, not because the refresh functions are absent
+  competing_bottlenecks_considered:
+    - name: low_edge_entry_churn_during_rebalance_release
+      status: present_in_sim_but_not_current_live_primary
+      evidence:
+        - local sim latest run still showed entry buy churn dominating turnover with zero realized pnl
+        - current live bot is already buy-suppressed by sell_drought guard, so that local patch is not the first-order live lever right now
+    - name: public_stream_instability
+      status: secondary_confirmed_but_not_current_primary
+      evidence:
+        - local sim latest run spent most events in PAUSED with repeated public stream reconnects
+        - recent live audit still contains reconnect and stream_error events, but the bot is currently quoting and holding one live sell order, so stream health is not the first-order blocker right now
+  secondary_bottleneck: intermittent_stream_interruptions_and_resyncs
+  secondary_bottleneck_evidence:
+    - recent live audit rows include reconnect, stream_error, and resync_complete events around the current run
+    - private_user last activity lags far behind public_books5 in the latest snapshot, so stream asymmetry remains a reliability risk
+  first_principles_note:
+    target_function: maximize realized pnl density first, then turnover
+    base_equation: net profitability = realized edge per unit turnover x turnover rate - execution and carry drag
+    live_failure_term:
+      - current live realized edge is not the immediate limiter because there were zero fills in the recent density windows
+      - turnover rate is the immediate limiter because the bot spent about 4.49 hours without a new fill while inventory remained above the drought threshold
+    causal_hypothesis:
+      - sell_drought guard removes fresh buy participation once rebalance sell starvation is detected
+      - the remaining rebalance sell path is currently bounded by a one-tick-below-cost release floor, which leaves the active order one tick above the live best ask
+      - because the order target remains unchanged at that price and size, the executor preserves the resting order instead of refreshing turnover
+
+mutation_surface:
+  allowed:
+    - parameters
+    - filters
+    - exits
+    - sizing_coefficients
+    - factor_toggles
+    - execution_timing
+  delayed:
+    - execution_rewrite
+    - model_architecture
+    - allocator_redesign
+  forbidden:
+    - disable_safety_checks
+    - edit_secrets
+    - exchange_account_changes
+    - live_capital_increase
+
+candidate_experiments:
+  - id: entry-density-hard-block-under-rebalance-pressure
+    status: challenger_coded_locally_not_deployed
+    hypothesis: >
+      When entry profit density has already degraded to the hard threshold and the
+      opposite-side rebalance leg is still waiting to release inventory, suppressing
+      fresh entry overlay should improve realized profit density and free turnover
+      for the profitable rebalance leg.
+    change_surface:
+      - strategy filter
+      - existing profit-density signal
+    validation:
+      - focused strategy regression tests
+      - no touched-path test regressions
+      - no promotion beyond code candidate without replay or shadow evidence
+  - id: live-sell-drought-release-acceleration
+    status: superseded_not_selected
+    hypothesis: >
+      On live, profitability is currently constrained more by rebalance release not
+      clearing inventory for hours than by extra entry churn, so the next high-value
+      mutation should improve sell-side release probability without stepping outside
+      the existing guardrails.
+    change_surface:
+      - rebalance release sizing geometry
+      - existing drought guard state
+    validation:
+      - keep release price concession unchanged
+      - only relax excess-only sizing while same-side drought guard is active in release mode
+      - preserve existing non-drought release behavior
+    evidence:
+      - in a local near-live replay state with strategy_position_base 2746.24231 and entry_base_size 2000, current logic limited release sell size to 746.24231 because excess-only stayed active under sell_drought
+      - the patched challenger keeps the same release ask price 1.0004 but expands size to 2000 under the same drought state
+      - recent live audit rows now confirm the current live decision target is exactly ask_price 1.0004 and ask_size 746.24231
+      - targeted regression passed and existing release-sell control tests still passed
+      - this experiment was superseded once live audit and live_position_lots confirmed that price, not size, is the dominant active constraint
+  - id: live-drought-release-extra-negative-tick
+    status: challenger_coded_locally_not_deployed
+    hypothesis: >
+      The stronger live bottleneck may be the release price floor itself: with the
+      current inventory lots all priced at 1.0005, rebalance_release_max_negative_ticks=1
+      pins the release floor at 1.0004, one tick above the live best ask 1.0003, so
+      the order can rest for hours without turnover.
+    change_surface:
+      - rebalance release pricing geometry
+      - drought-specific release concession
+    validation:
+      - confirm from current live lot prefix that both 746-base and 2000-base release slices share the same 1.0004 floor under negative_tick=1
+      - quantify the realized edge sacrifice of moving the drought release floor to 1.0003
+      - do not promote without explicit evidence that turnover gain outweighs the extra realized loss
+    evidence:
+      - current live snapshot confirms the managed sell order remains at 1.0004 while best_ask is 1.0003
+      - current live lot prefix confirms the cost floor is 1.0005 for the whole 2746.24231 long inventory, so negative_tick=1 always binds the release floor at 1.0004
+      - moving from 1.0004 to 1.0003 costs about 0.9997000899730080975707287814 per 10k turnover, which is measurable but bounded
+      - local near-live replay now reproduces ask_price 1.0003 with unchanged ask_size 746.24231
+      - targeted regression and full test_strategy.py both pass after coding the challenger
+
+validation:
+  require_time_aware_oos: false
+  require_holdout: false
+  require_bias_audit: false
+  require_cost_realism: true
+  require_stability_across_windows: false
+  require_capacity_check: true
+  current_runner_status: no_dedicated_time_aware_okx_usdc_replay_runner
+  local_gates:
+    - focused unit regression passes
+    - strategy change remains inside filters and sizing surface
+    - shadow or sim follow-up required before promotion
+    - live challenger must be deployed before restart or live comparison
+
+promotion:
+  require_paper_or_shadow: true
+  require_canary: false
+  paper_days: 3
+  canary_days: 0
+
+stop_conditions:
+  interrupt_on_bias: true
+  interrupt_on_data_corruption: true
+  interrupt_on_risk_breach: true
+  interrupt_on_missing_infra: true
+  max_failed_rounds_before_narrowing: 2

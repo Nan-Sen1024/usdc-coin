@@ -17,11 +17,11 @@ trading:
   quote_ccy: USDT
   budget_base_total: 3200
   budget_quote_total: 3000
-  entry_base_size: 500
+  entry_base_size: 1000
   post_only: true
-  quote_size: 500
+  quote_size: 1000
   min_quote_size: 100
-  max_quote_size: 500
+  max_quote_size: 1000
   loop_interval_seconds: 1.0
   balance_poll_interval_seconds: 20.0
   order_ttl_seconds: 6.0
@@ -72,6 +72,12 @@ strategy:
   secondary_entry_layer_min_edge_ticks: 4
   rebalance_overlay_preserve_tolerance_ticks: 1
   rebalance_secondary_price_offset_ticks: 0
+  entry_profit_density_enabled: true
+  entry_profit_density_window_minutes: 30
+  entry_profit_density_soft_per10k: 0.15
+  entry_profit_density_hard_per10k: 0.05
+  entry_profit_density_soft_size_factor: 0.70
+  entry_profit_density_hard_size_factor: 0.40
   rebalance_profit_density_enabled: true
   rebalance_profit_density_window_minutes: 60
   rebalance_profit_density_soft_per10k: 0.08

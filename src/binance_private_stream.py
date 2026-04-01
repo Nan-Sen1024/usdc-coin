@@ -194,17 +194,26 @@ class BinancePrivateUserStream:
 
     def _normalize_execution_report(self, payload: dict) -> dict:
         inst_id = self.inst_id if str(payload.get("s") or "").upper() == self.symbol else str(payload.get("s") or "")
+        state = self._normalize_order_status(str(payload.get("X") or ""))
+        client_order_id = str(payload.get("c") or "")
+        original_client_order_id = str(payload.get("C") or "")
+        # Binance terminal cancel/expire updates can surface a transient cancel request id in `c`
+        # while the original managed order id is carried in `C`.
+        if state == "canceled" and original_client_order_id:
+            client_order_id = original_client_order_id
+        elif not client_order_id and original_client_order_id:
+            client_order_id = original_client_order_id
         return {
             "instId": inst_id,
             "side": str(payload.get("S") or "").lower(),
             "ordId": str(payload.get("i") or ""),
-            "clOrdId": str(payload.get("c") or ""),
+            "clOrdId": client_order_id,
             "px": str(payload.get("p") or "0"),
             "sz": str(payload.get("q") or "0"),
             "accFillSz": str(payload.get("z") or "0"),
             "fillSz": str(payload.get("l") or "0"),
             "fillPx": str(payload.get("L") or "0"),
-            "state": self._normalize_order_status(str(payload.get("X") or "")),
+            "state": state,
             "cTime": str(payload.get("O") or payload.get("E") or "0"),
             "uTime": str(payload.get("T") or payload.get("E") or "0"),
         }

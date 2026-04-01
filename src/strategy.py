@@ -172,7 +172,16 @@ class MicroMakerStrategy:
                     rebalance_mode=rebalance_mode,
                     inventory_repair_steps=inventory_repair_steps,
                 )
-            elif not bid_toxic_cooldown and not sell_drought_guard_active:
+            elif (
+                not bid_toxic_cooldown
+                and not sell_drought_guard_active
+                and not self._entry_blocked_by_weak_density(
+                    state=state,
+                    side="buy",
+                    rebalance_buy_base=rebalance_buy_base,
+                    rebalance_sell_base=rebalance_sell_base,
+                )
+            ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=bid_base_size,
@@ -225,7 +234,17 @@ class MicroMakerStrategy:
                     rebalance_mode=rebalance_mode,
                     inventory_repair_steps=inventory_repair_steps,
                 )
-            elif not ask_toxic_cooldown and rebalance_buy_base <= 0 and not buy_drought_guard_active:
+            elif (
+                not ask_toxic_cooldown
+                and rebalance_buy_base <= 0
+                and not buy_drought_guard_active
+                and not self._entry_blocked_by_weak_density(
+                    state=state,
+                    side="sell",
+                    rebalance_buy_base=rebalance_buy_base,
+                    rebalance_sell_base=rebalance_sell_base,
+                )
+            ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=ask_base_size,
@@ -524,6 +543,30 @@ class MicroMakerStrategy:
             return Decimal("1")
         return min(max(state.entry_profit_density_size_factor, Decimal("0")), Decimal("1"))
 
+    def _entry_hard_density_block_active(self, *, state: BotState) -> bool:
+        if not self.config.entry_profit_density_enabled:
+            return False
+        per10k = state.entry_profit_density_per10k
+        if per10k is None:
+            return False
+        return per10k <= self.config.entry_profit_density_hard_per10k
+
+    def _entry_blocked_by_weak_density(
+        self,
+        *,
+        state: BotState,
+        side: str,
+        rebalance_buy_base: Decimal,
+        rebalance_sell_base: Decimal,
+    ) -> bool:
+        if not self._entry_hard_density_block_active(state=state):
+            return False
+        if side == "buy":
+            return rebalance_sell_base > 0
+        if side == "sell":
+            return rebalance_buy_base > 0
+        return False
+
     def _buy_drought_guard_active(
         self,
         *,
@@ -662,7 +705,12 @@ class MicroMakerStrategy:
                         reason="rebalance_open_short",
                         base_size=bid_base_size,
                     )
-            else:
+            elif not self._entry_blocked_by_weak_density(
+                state=state,
+                side="buy",
+                rebalance_buy_base=rebalance_buy_base,
+                rebalance_sell_base=rebalance_sell_base,
+            ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=fixed_entry_base_size,
@@ -705,7 +753,12 @@ class MicroMakerStrategy:
                         reason="rebalance_open_long",
                         base_size=ask_base_size,
                     )
-            else:
+            elif not self._entry_blocked_by_weak_density(
+                state=state,
+                side="sell",
+                rebalance_buy_base=rebalance_buy_base,
+                rebalance_sell_base=rebalance_sell_base,
+            ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=fixed_entry_base_size,
@@ -867,10 +920,16 @@ class MicroMakerStrategy:
             if bid_base_size >= state.instrument.min_size:
                 bid_price = bid_market_price
                 if rebalance_mode == "release":
+                    release_negative_ticks = max(self.config.rebalance_release_max_negative_ticks, 0) + self._drought_release_extra_negative_ticks(
+                        state=state,
+                        side="buy",
+                        rebalance_base=rebalance_buy_base,
+                        rebalance_mode=rebalance_mode,
+                    )
                     buy_price_cap = state.max_rebalance_buy_price(
                         bid_base_size,
                         tick_size=state.instrument.tick_size,
-                        profit_ticks=-max(self.config.rebalance_release_max_negative_ticks, 0),
+                        profit_ticks=-release_negative_ticks,
                     )
                 else:
                     buy_price_cap = state.max_rebalance_buy_price(
@@ -931,10 +990,16 @@ class MicroMakerStrategy:
             if ask_base_size >= state.instrument.min_size:
                 ask_price = ask_market_price
                 if rebalance_mode == "release":
+                    release_negative_ticks = max(self.config.rebalance_release_max_negative_ticks, 0) + self._drought_release_extra_negative_ticks(
+                        state=state,
+                        side="sell",
+                        rebalance_base=rebalance_sell_base,
+                        rebalance_mode=rebalance_mode,
+                    )
                     sell_price_floor = state.min_rebalance_sell_price(
                         ask_base_size,
                         tick_size=state.instrument.tick_size,
-                        profit_ticks=-max(self.config.rebalance_release_max_negative_ticks, 0),
+                        profit_ticks=-release_negative_ticks,
                     )
                 else:
                     sell_price_floor = state.min_rebalance_sell_price(
@@ -1350,6 +1415,31 @@ class MicroMakerStrategy:
             side=side,
         )
         return factor
+
+    def _drought_release_extra_negative_ticks(
+        self,
+        *,
+        state: BotState,
+        side: str,
+        rebalance_base: Decimal,
+        rebalance_mode: str,
+    ) -> int:
+        if rebalance_mode != "release":
+            return 0
+        inventory_ratio = state.inventory_ratio()
+        if side == "sell":
+            return 1 if self._sell_drought_guard_active(
+                state=state,
+                inventory_ratio=inventory_ratio,
+                rebalance_sell_base=rebalance_base,
+            ) else 0
+        if side == "buy":
+            return 1 if self._buy_drought_guard_active(
+                state=state,
+                inventory_ratio=inventory_ratio,
+                rebalance_buy_base=rebalance_base,
+            ) else 0
+        return 0
 
     def _competitive_rebalance_base_size(
         self,
