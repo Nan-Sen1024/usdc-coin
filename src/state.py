@@ -26,6 +26,9 @@ class BotState:
         self.live_orders: dict[str, LiveOrder] = {}
         self.reconnect_events: deque[int] = deque()
         self.initial_nav_quote: Decimal | None = None
+        self.strategy_nav_peak_quote: Decimal | None = None
+        self.account_total_eq_quote: Decimal | None = None
+        self.account_total_eq_peak_quote: Decimal | None = None
         self.last_fill_ms: int | None = None
         self.runtime_state = "INIT"
         self.runtime_reason = "booting"
@@ -202,6 +205,9 @@ class BotState:
             return None
 
         self.initial_nav_quote = self._optional_decimal(payload.get("initial_nav_quote"))
+        self.strategy_nav_peak_quote = self._optional_decimal(payload.get("strategy_nav_peak_quote"))
+        self.account_total_eq_quote = self._optional_decimal(payload.get("account_total_eq_quote"))
+        self.account_total_eq_peak_quote = self._optional_decimal(payload.get("account_total_eq_peak_quote"))
         self.last_fill_ms = self._optional_int(payload.get("last_fill_ms"))
         self.startup_recovery_side = str(payload.get("startup_recovery_side") or "").lower()
         self.shadow_realized_pnl_quote = parse_decimal(payload.get("shadow_realized_pnl_quote") or "0")
@@ -231,6 +237,7 @@ class BotState:
             self.exchange_balances = restored_exchange_balances
         if restored_budget_balances or restored_exchange_balances:
             self._refresh_effective_balances()
+        self._refresh_peak_metrics()
         fill_ts_payload = payload.get("last_managed_fill_ts_ms_by_side_bucket")
         restored_fill_ts: dict[str, int] = {}
         if isinstance(fill_ts_payload, dict):
@@ -283,6 +290,9 @@ class BotState:
         }
 
     def apply_account_update(self, payload: dict) -> None:
+        total_eq = self._optional_decimal(payload.get("totalEq"))
+        if total_eq is not None and total_eq > 0:
+            self.account_total_eq_quote = total_eq
         for item in payload.get("details", []):
             ccy = item.get("ccy")
             if not ccy:
@@ -1121,11 +1131,35 @@ class BotState:
         quote_total = self.total_balance(self.instrument.quote_ccy)
         return base_total * self.book.mid + quote_total
 
+    def exchange_nav_quote(self) -> Decimal | None:
+        if not self.instrument or not self.book or not self.book.mid:
+            return None
+        base_total = self.exchange_total_balance(self.instrument.base_ccy)
+        quote_total = self.exchange_total_balance(self.instrument.quote_ccy)
+        return base_total * self.book.mid + quote_total
+
+    def account_equity_quote(self) -> Decimal | None:
+        if self.account_total_eq_quote is not None:
+            return self.account_total_eq_quote
+        return self.exchange_nav_quote()
+
     def daily_pnl_quote(self) -> Decimal | None:
         nav = self.nav_quote()
         if nav is None or self.initial_nav_quote is None:
             return None
         return nav - self.initial_nav_quote
+
+    def strategy_drawdown_quote(self) -> Decimal | None:
+        nav = self.nav_quote()
+        if nav is None or self.strategy_nav_peak_quote is None:
+            return None
+        return nav - self.strategy_nav_peak_quote
+
+    def account_drawdown_quote(self) -> Decimal | None:
+        equity = self.account_equity_quote()
+        if equity is None or self.account_total_eq_peak_quote is None:
+            return None
+        return equity - self.account_total_eq_peak_quote
 
     def live_unrealized_pnl_quote(self) -> Decimal | None:
         if not self.book or self.book.mid is None:
@@ -1154,6 +1188,9 @@ class BotState:
             "budget_balances": self.budget_balances,
             "live_orders": self.live_orders,
             "initial_nav_quote": self.initial_nav_quote,
+            "strategy_nav_peak_quote": self.strategy_nav_peak_quote,
+            "account_total_eq_quote": self.account_total_eq_quote,
+            "account_total_eq_peak_quote": self.account_total_eq_peak_quote,
             "last_fill_ms": self.last_fill_ms,
             "startup_recovery_side": self.startup_recovery_side,
             "runtime_state": self.runtime_state,
@@ -1190,6 +1227,9 @@ class BotState:
             "rebalance_profit_density_extra_ticks": self.rebalance_profit_density_extra_ticks,
             "live_unrealized_pnl_quote": self.live_unrealized_pnl_quote(),
             "live_total_pnl_quote": self.live_total_pnl_quote(),
+            "strategy_drawdown_quote": self.strategy_drawdown_quote(),
+            "account_equity_quote": self.account_equity_quote(),
+            "account_drawdown_quote": self.account_drawdown_quote(),
             "strategy_position_base": self.strategy_position_base(),
             "live_position_lots": list(self.live_position_lots),
             "initial_external_base_inventory": self.initial_external_base_inventory,
@@ -1208,14 +1248,27 @@ class BotState:
         self.state_path.write_text(json.dumps(to_jsonable(payload), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _init_nav_if_possible(self) -> None:
-        if self.initial_nav_quote is None and self._has_balance_snapshot():
+        if self._has_balance_snapshot():
             nav = self.nav_quote()
-            if nav is not None and nav > 0:
+            if self.initial_nav_quote is None and nav is not None and nav > 0:
                 self.initial_nav_quote = nav
+        self._refresh_peak_metrics()
 
     def _init_shadow_cost_if_possible(self) -> None:
         if self.shadow_base_cost_quote is None and self.instrument and self.book and self.book.mid is not None and self._has_balance_snapshot():
             self.shadow_base_cost_quote = self.total_balance(self.instrument.base_ccy) * self.book.mid
+
+    def _refresh_peak_metrics(self) -> None:
+        nav = self.nav_quote()
+        if nav is not None and nav > 0:
+            baseline = self.initial_nav_quote if self.initial_nav_quote is not None and self.initial_nav_quote > 0 else nav
+            candidate = nav if nav > baseline else baseline
+            if self.strategy_nav_peak_quote is None or candidate > self.strategy_nav_peak_quote:
+                self.strategy_nav_peak_quote = candidate
+        account_equity = self.account_equity_quote()
+        if account_equity is not None and account_equity > 0:
+            if self.account_total_eq_peak_quote is None or account_equity > self.account_total_eq_peak_quote:
+                self.account_total_eq_peak_quote = account_equity
 
     @staticmethod
     def _optional_decimal(value) -> Decimal | None:
@@ -1380,6 +1433,7 @@ class BotState:
                 frozen=exchange_frozen,
             )
         self._refresh_effective_balances(currencies=(ccy,))
+        self._refresh_peak_metrics()
 
     def _has_balance_snapshot(self) -> bool:
         if not self.instrument:

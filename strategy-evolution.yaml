@@ -1,7 +1,7 @@
 target:
   strategy_scope: okx_usdc_usdt
   primary_metric: realized_per_10k_turnover
-  current_value: 0.09956740149593398855137188518
+  current_value: 0.1334433956341784364805282846
   target_value: null
   optimize_direction: maximize
   secondary_metrics:
@@ -29,7 +29,7 @@ autonomy:
     jitter_minutes: 0
 
 diagnosis:
-  as_of: 2026-04-01
+  as_of: 2026-04-02
   data_sources:
     local_state_snapshot: trend_bot_6/data/usdc/state_snapshot.sim.json
     local_journal: trend_bot_6/data/usdc/journal.sim.jsonl
@@ -65,10 +65,11 @@ diagnosis:
     runtime_state: QUOTING
     runtime_reason: sell_drought_rebalance_sell_only
     live_realized_pnl_quote: 0.9952445582
-    live_unrealized_pnl_quote: -0.6865605775
-    live_total_pnl_quote: 0.3086839807
+    live_unrealized_pnl_quote: -0.9611848085
+    live_total_pnl_quote: 0.0340597497
     strategy_position_base: 2746.24231
     inventory_ratio: 0.6144719695016632547273875417
+    inventory_ratio_source: latest_decision_payload
     observed_fill_count: 95
     observed_fill_volume_quote: 74581.7770501256
     entry_profit_density_per10k: null
@@ -76,35 +77,60 @@ diagnosis:
     rebalance_profit_density_per10k: null
     rebalance_profit_density_size_factor: 1
     rebalance_profit_density_extra_ticks: 0
-    book_best_bid: 1.0002
-    book_best_ask: 1.0003
-    latest_audit_ts_utc: 2026-04-01T13:14:31.731000+00:00
-    last_fill_ts_utc: 2026-04-01T09:14:19.287000+00:00
-    last_amend_ts_utc: 2026-04-01T09:14:19.288000+00:00
-    no_fill_gap_hours: 4.003456666666667
-    no_amend_gap_hours: 4.003456388888889
+    book_best_bid: 1.0001
+    book_best_ask: 1.0002
+    mark_mid_price: 1.00015
+    latest_journal_ts_utc: 2026-04-02T14:40:47.702000+00:00
+    last_fill_ts_utc: 2026-04-01T08:14:09.911000+00:00
+    no_fill_gap_hours: 30.401395833333333
     current_live_order:
       side: sell
       reason: rebalance_open_long
-      price: 1.0004
-      size: 777.255596
-      filled_size: 31.013286
+      price: 1.0003
+      size: 746.24231
+      filled_size: 0
       remaining_size: 746.24231
+      age_hours: 24.412708055555556
+      state: live
+    live_position_lot_summary:
+      long_lot_count: 5
+      avg_cost_price: 1.0005
+      all_positive_lots_share_same_cost: true
+      mark_to_mid_pnl_quote: -0.9611848085
+      mark_to_bid_pnl_quote: -1.0984969240
+      mark_to_ask_pnl_quote: -0.8238726930
+    since_previous_analysis:
+      total_pnl_delta_quote: -0.2746242310
+      unrealized_pnl_delta_quote: -0.2746242310
+      equal_to_one_tick_inventory_move: true
+    current_run:
+      run_id: 20260401T141255658046Z
+      decision_counts:
+        sell_drought_rebalance_sell_only: 5573
+        stale_public_stream: 1016
+        streams_not_ready: 24
+      event_counts:
+        place_order: 1
+        order_update: 1
+        fill_like_updates: 0
+        stream_error: 34
+        reconnect: 20
+        resync_complete: 27
     fill_events_total:
       entry: 67
       rebalance: 28
     profitability_windows:
       lifetime_realized_per_10k: 0.1334433956341784364805282846
       last_24h:
-        fill_count: 26
-        turnover_quote: 28882.6750033578
-        realized_pnl_quote: 0.4358104260
-        realized_per_10k: 0.1508899109758130733017428220
+        fill_count: 0
+        turnover_quote: 0
+        realized_pnl_quote: 0
+        realized_per_10k: null
       last_6h:
-        fill_count: 4
-        turnover_quote: 631.3256913144
-        realized_pnl_quote: -0.0031013286
-        realized_per_10k: -0.04912406769860945373052652747
+        fill_count: 0
+        turnover_quote: 0
+        realized_pnl_quote: 0
+        realized_per_10k: null
     reason_bucket_profitability:
       entry:
         turnover_quote: 43167.2285526965
@@ -115,42 +141,42 @@ diagnosis:
         realized_pnl_quote: 0.5452445582
         realized_per_10k: 0.1735643465461939259937353537
     active_code_gap:
-      remote_has_entry_density_hard_block: false
-      remote_has_new_regression_test: false
-      remote_has_drought_extra_negative_tick: false
-  primary_bottleneck: live_rebalance_release_price_floor_binding_above_market
+      remote_has_entry_density_hard_block: true
+      remote_has_new_regression_test: true
+      remote_has_drought_extra_negative_tick: true
+  primary_bottleneck: live_unhedged_inventory_mark_to_market_drag_with_slow_release
   primary_bottleneck_evidence:
-    - live runtime has stayed in sell_drought_rebalance_sell_only while inventory_ratio remains above the 0.60 drought threshold
-    - recent live decision rows repeatedly target ask_price 1.0004 and ask_size 746.24231 with reason rebalance_open_long
-    - current snapshot shows best_ask 1.0003 while the only live managed sell order is still parked at 1.0004 with remaining_size 746.24231
-    - the last amend and the last fill on that managed sell order both happened about 4.00 hours before the latest audit event, so the order is not turning over
-    - recent live profitability has deteriorated: last 6h realized_pnl_quote is -0.0031013286 and realized_per_10k is -0.04912406769860945373052652747
-    - profit-density signals are null because the configured lookback windows contain zero recent fill turnover, not because the refresh functions are absent
+    - current total pnl is only 0.0340597497 because 0.9952445582 of realized pnl is being almost entirely offset by -0.9611848085 of unrealized pnl
+    - the unrealized pnl matches the exact mark-to-mid loss of holding 2746.24231 base at avg cost 1.0005 against current mid 1.00015
+    - compared with the prior live snapshot, total pnl and unrealized pnl both worsened by exactly -0.2746242310, which equals one adverse tick on the full 2746.24231 inventory
+    - the current run has lasted over 24 hours with one place_order, one order_update, and zero fill-like updates, so the losing term is inventory carry rather than fresh trading losses
+    - current decision flow remains dominated by sell_drought_rebalance_sell_only while the live sell order still rests at 1.0003 above the current best ask 1.0002, so release is active but not clearing
   competing_bottlenecks_considered:
     - name: low_edge_entry_churn_during_rebalance_release
       status: present_in_sim_but_not_current_live_primary
       evidence:
         - local sim latest run still showed entry buy churn dominating turnover with zero realized pnl
-        - current live bot is already buy-suppressed by sell_drought guard, so that local patch is not the first-order live lever right now
+        - current live bot is already buy-suppressed by sell_drought guard, and the current run has produced zero fills, so entry churn is not the active cash-loss term right now
     - name: public_stream_instability
       status: secondary_confirmed_but_not_current_primary
       evidence:
-        - local sim latest run spent most events in PAUSED with repeated public stream reconnects
-        - recent live audit still contains reconnect and stream_error events, but the bot is currently quoting and holding one live sell order, so stream health is not the first-order blocker right now
+        - the current live run still logged 1016 stale_public_stream decisions plus 34 stream_error and 20 reconnect events
+        - stream health is degrading release reliability, but it does not explain why the unrealized loss equals the inventory mark-down exactly
   secondary_bottleneck: intermittent_stream_interruptions_and_resyncs
   secondary_bottleneck_evidence:
-    - recent live audit rows include reconnect, stream_error, and resync_complete events around the current run
-    - private_user last activity lags far behind public_books5 in the latest snapshot, so stream asymmetry remains a reliability risk
+    - the current live run still logged repeated stale public stream decisions and reconnection cycles
+    - current run event counts still show 34 stream_error, 20 reconnect, and 27 resync_complete events
   first_principles_note:
-    target_function: maximize realized pnl density first, then turnover
-    base_equation: net profitability = realized edge per unit turnover x turnover rate - execution and carry drag
+    target_function: maximize live realized pnl density while preventing inventory mark losses from overwhelming realized gains
+    base_equation: live_total_pnl = live_realized_pnl + inventory_base x (mark_price - avg_cost_basis)
     live_failure_term:
-      - current live realized edge is not the immediate limiter because there were zero fills in the recent density windows
-      - turnover rate is the immediate limiter because the bot spent about 4.49 hours without a new fill while inventory remained above the drought threshold
+      - current live realized edge is dormant because there were zero fills in the last 24 hours
+      - the dominant active loss term is the marked-down value of the remaining long inventory, not fees or new execution losses
     causal_hypothesis:
-      - sell_drought guard removes fresh buy participation once rebalance sell starvation is detected
-      - the remaining rebalance sell path is currently bounded by a one-tick-below-cost release floor, which leaves the active order one tick above the live best ask
-      - because the order target remains unchanged at that price and size, the executor preserves the resting order instead of refreshing turnover
+      - earlier entry and rebalance buys accumulated 2746.24231 base at 1.0005 cost while the live market later repriced to 1.0001 bid and 1.0002 ask
+      - sell_drought guard then froze the strategy into release-only mode, so the bot stopped cycling fresh two-sided turnover and became a largely passive inventory releaser
+      - the deployed extra-negative-tick challenger improved the release order from 1.0004 to 1.0003, but the market moved down to 1.0002 best ask, leaving the release order one tick above the market again
+      - with no fills for 30.40 hours, inventory mark loss has had time to consume nearly all accumulated realized gains
 
 mutation_surface:
   allowed:
@@ -172,7 +198,7 @@ mutation_surface:
 
 candidate_experiments:
   - id: entry-density-hard-block-under-rebalance-pressure
-    status: challenger_coded_locally_not_deployed
+    status: deployed_on_live_not_active_current_regime
     hypothesis: >
       When entry profit density has already degraded to the hard threshold and the
       opposite-side rebalance leg is still waiting to release inventory, suppressing
@@ -206,7 +232,7 @@ candidate_experiments:
       - targeted regression passed and existing release-sell control tests still passed
       - this experiment was superseded once live audit and live_position_lots confirmed that price, not size, is the dominant active constraint
   - id: live-drought-release-extra-negative-tick
-    status: challenger_coded_locally_not_deployed
+    status: deployed_on_live_under_observation
     hypothesis: >
       The stronger live bottleneck may be the release price floor itself: with the
       current inventory lots all priced at 1.0005, rebalance_release_max_negative_ticks=1
@@ -220,11 +246,54 @@ candidate_experiments:
       - quantify the realized edge sacrifice of moving the drought release floor to 1.0003
       - do not promote without explicit evidence that turnover gain outweighs the extra realized loss
     evidence:
-      - current live snapshot confirms the managed sell order remains at 1.0004 while best_ask is 1.0003
-      - current live lot prefix confirms the cost floor is 1.0005 for the whole 2746.24231 long inventory, so negative_tick=1 always binds the release floor at 1.0004
-      - moving from 1.0004 to 1.0003 costs about 0.9997000899730080975707287814 per 10k turnover, which is measurable but bounded
-      - local near-live replay now reproduces ask_price 1.0003 with unchanged ask_size 746.24231
-      - targeted regression and full test_strategy.py both pass after coding the challenger
+      - remote live code now contains the drought extra negative tick helper and the current managed sell order is indeed at 1.0003
+      - after deployment, the market moved one more tick lower to 1.0002 best ask, so the release order is again one tick above the market
+      - the deployment therefore improved release pricing by one tick but did not eliminate the underlying inventory mark-to-market sensitivity
+      - current live lot prefix still confirms the cost floor is 1.0005 for the whole 2746.24231 long inventory, so even 1.0003 remains below cost and 1.0002 would require another tick of realized concession
+  - id: progressive-drought-release-concession
+    status: challenger_coded_locally_not_deployed
+    hypothesis: >
+      Once sell_drought or buy_drought is active, keeping the extra release concession
+      fixed at one tick leaves aged inventory stranded above the market for too long.
+      Scaling drought-only extra negative ticks with drought duration should improve
+      release turnover without changing drought trigger thresholds or release sizing.
+    change_surface:
+      - drought-specific release pricing geometry
+      - existing managed fill age signal
+    validation:
+      - keep the first drought window at the current one-extra-tick behavior
+      - cap drought-only extra negative ticks at three
+      - preserve non-drought release behavior and release sizing geometry
+      - require focused drought/release regression and full strategy regression before any live promotion
+    evidence:
+      - current active live analysis showed a 2026-04-03 19:57:51 +08 release sell parked at 1.0003 while best_ask was 1.0001, with no fills since 2026-04-01 16:14:09 +08
+      - the deployed single extra drought tick improved release pricing once, but did not keep pace with a longer no-fill drought
+      - the strategy already tracks managed rebalance fill age, so drought duration can be promoted into a bounded price-only concession without changing trigger windows or release size
+
+external_benchmark_review:
+  as_of: 2026-04-01
+  subject: binance_okx_arbitrage_and_market_making_report
+  decision: borrow_selected_components_not_full_strategy_replacement
+  confirmed_strengths:
+    - the report is directionally correct that cross-venue and carry systems should read instrument rules fees and funding fields dynamically instead of hard-coding them
+    - the report is directionally correct that post-only discipline execution deadlines and hedge timeout logic are first-order for cross-venue profitability
+    - the report is directionally correct that market-making backtests need order-book aware replay to avoid optimistic fill assumptions
+  better_than_bot6_in:
+    - explicit all-in cost accounting that decomposes gross edge fees slippage carry and hedge gap before entry
+    - broader strategy surface including perp-perp spread funding carry and maker-hedge hybrids
+    - stronger infra checklist for dual-venue execution logging monitoring and replay
+  not_better_than_bot6_in:
+    - immediate deployability inside the current codebase because bot6 is still a spot cash micro-maker rather than a dual-venue derivatives OMS
+    - local execution realism for the current live bottleneck because the dominant observed issue is stalled release turnover not missing perp alpha
+    - risk simplicity because perp carry and maker-hedge add liquidation funding and hedge-gap risk that bot6 does not currently model
+  borrow_now:
+    - add benchmark-style all-in executable edge thresholds to read-only cross-venue observers before any live expansion
+    - rank venue reliability and execution completeness as first-class factors alongside spread and fee drag
+    - keep strategy family separation explicit: stablecoin spot making remains bot6, perp or funding carry should start as a parallel module or new project
+  defer_for_new_project:
+    - cross-exchange perp-perp arbitrage
+    - funding-carry execution and settlement accounting
+    - maker-on-one-venue hedge-on-another-venue inventory engine
 
 validation:
   require_time_aware_oos: false

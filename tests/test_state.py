@@ -44,6 +44,8 @@ def test_initial_nav_waits_for_balances():
     )
 
     assert state.initial_nav_quote == Decimal("99997.5")
+    assert state.strategy_nav_peak_quote == Decimal("99997.5")
+    assert state.account_total_eq_peak_quote == Decimal("99997.5")
     assert state.shadow_base_cost_quote == Decimal("49997.5")
 
 
@@ -212,6 +214,70 @@ def test_live_pnl_tracks_realized_and_unrealized_from_managed_fills():
     assert state.strategy_position_base() == Decimal("0")
     assert state.live_realized_pnl_quote == Decimal("1")
     assert state.live_unrealized_pnl_quote() == Decimal("0")
+
+
+def test_state_tracks_strategy_and_account_drawdowns_separately():
+    state = BotState(managed_prefix="bot6", state_path="data/test_state.json")
+    state.set_instrument(
+        InstrumentMeta(
+            inst_id="USDC-USDT",
+            inst_type="SPOT",
+            base_ccy="USDC",
+            quote_ccy="USDT",
+            tick_size=Decimal("0.0001"),
+            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
+            max_market_amount=Decimal("1000000"),
+            max_limit_amount=Decimal("20000000"),
+        )
+    )
+    state.set_book(
+        BookSnapshot(
+            ts_ms=1,
+            received_ms=1,
+            bids=[BookLevel(price=Decimal("1.0000"), size=Decimal("1000"))],
+            asks=[BookLevel(price=Decimal("1.0001"), size=Decimal("1000"))],
+        )
+    )
+    state.set_balances(
+        {
+            "USDC": Balance(ccy="USDC", total=Decimal("10000"), available=Decimal("10000")),
+            "USDT": Balance(ccy="USDT", total=Decimal("10000"), available=Decimal("10000")),
+        }
+    )
+    state.apply_account_update(
+        {
+            "totalEq": "33010",
+            "details": [
+                {"ccy": "USDC", "cashBal": "10000", "availBal": "10000"},
+                {"ccy": "USDT", "cashBal": "10000", "availBal": "10000"},
+            ],
+        }
+    )
+
+    state.set_book(
+        BookSnapshot(
+            ts_ms=2,
+            received_ms=2,
+            bids=[BookLevel(price=Decimal("0.9999"), size=Decimal("1000"))],
+            asks=[BookLevel(price=Decimal("1.0000"), size=Decimal("1000"))],
+        )
+    )
+    state.apply_account_update(
+        {
+            "totalEq": "33001.8",
+            "details": [
+                {"ccy": "USDC", "cashBal": "10000", "availBal": "10000"},
+                {"ccy": "USDT", "cashBal": "10000", "availBal": "10000"},
+            ],
+        }
+    )
+
+    assert state.strategy_nav_peak_quote == Decimal("20000.5")
+    assert state.strategy_drawdown_quote() == Decimal("-1")
+    assert state.account_equity_quote() == Decimal("33001.8")
+    assert state.account_total_eq_peak_quote == Decimal("33010")
+    assert state.account_drawdown_quote() == Decimal("-8.2")
 
 
 def test_state_marks_side_toxic_flow_cooldown_after_adverse_fill(monkeypatch):
@@ -398,6 +464,9 @@ def test_load_persisted_accounting_restores_live_state(tmp_path):
     )
     state._adjust_balance("USDT", total_delta=Decimal("3202.078"), available_delta=Decimal("3202.078"))
     state.initial_nav_quote = Decimal("25000")
+    state.strategy_nav_peak_quote = Decimal("25006")
+    state.account_total_eq_quote = Decimal("33010.5")
+    state.account_total_eq_peak_quote = Decimal("33018.2")
     state.live_realized_pnl_quote = Decimal("2.2")
     state.observed_fill_count = 4
     state.observed_fill_volume_quote = Decimal("2888.8692150357")
@@ -422,6 +491,9 @@ def test_load_persisted_accounting_restores_live_state(tmp_path):
 
     assert summary is not None
     assert restored.initial_nav_quote == Decimal("25000")
+    assert restored.strategy_nav_peak_quote == Decimal("25006")
+    assert restored.account_total_eq_quote == Decimal("33010.5")
+    assert restored.account_total_eq_peak_quote == Decimal("33018.2")
     assert restored.live_realized_pnl_quote == Decimal("2.2")
     assert restored.observed_fill_count == 4
     assert restored.observed_fill_volume_quote == Decimal("2888.8692150357")

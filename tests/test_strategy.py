@@ -2493,8 +2493,8 @@ def test_strategy_release_sell_only_uses_excess_inventory_chunk(monkeypatch):
     assert decision.reason == "fill_rebalance_sell_only"
 
 
-def test_strategy_sell_drought_release_sell_adds_one_extra_negative_tick(monkeypatch):
-    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_001_800_000)
+def test_strategy_sell_drought_release_sell_adds_one_extra_negative_tick_on_first_window(monkeypatch):
+    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_001_811_000)
     strategy = MicroMakerStrategy(
         StrategyConfig(
             secondary_layers_enabled=False,
@@ -2553,8 +2553,8 @@ def test_strategy_sell_drought_release_sell_adds_one_extra_negative_tick(monkeyp
             "sz": "100",
             "accFillSz": "100",
             "state": "filled",
-            "cTime": "1699998140000",
-            "uTime": "1699998140000",
+            "cTime": "1700000010000",
+            "uTime": "1700000010000",
         },
         source="test",
     )
@@ -2578,6 +2578,253 @@ def test_strategy_sell_drought_release_sell_adds_one_extra_negative_tick(monkeyp
     assert decision.ask.price == Decimal("1.0003")
     assert decision.ask.base_size == Decimal("746.24231")
     assert decision.reason == "sell_drought_rebalance_sell_only"
+
+
+def test_strategy_sell_drought_release_sell_scales_to_three_extra_ticks_for_aged_inventory(monkeypatch):
+    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_007_200_000)
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+            sell_drought_guard_enabled=True,
+            sell_drought_inventory_ratio_pct=Decimal("0.60"),
+            sell_drought_rebalance_window_seconds=1800,
+            rebalance_min_profit_ticks=1,
+            rebalance_reload_timeout_seconds=120,
+            rebalance_max_order_age_seconds=12,
+            rebalance_release_excess_only=True,
+            rebalance_release_max_negative_ticks=1,
+            rebalance_release_depth_levels=1,
+            rebalance_release_depth_fraction=Decimal("0.10"),
+            rebalance_release_depth_step_bonus=Decimal("0.05"),
+        ),
+        TradingConfig(entry_base_size=Decimal("2000"), quote_size=Decimal("2000"), order_ttl_seconds=6),
+    )
+    state = build_state("14747.3273", "9252.6727")
+    state.set_book(
+        BookSnapshot(
+            ts_ms=1,
+            bids=[BookLevel(price=Decimal("1.0004"), size=Decimal("100000"))],
+            asks=[BookLevel(price=Decimal("1.0005"), size=Decimal("100000"))],
+        )
+    )
+
+    buy_id = build_cl_ord_id("bot6", "buy")
+    state.set_order_reason(cl_ord_id=buy_id, reason="join_best_bid")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "b1",
+            "clOrdId": buy_id,
+            "px": "1.0005",
+            "fillPx": "1.0005",
+            "sz": "2846.24231",
+            "accFillSz": "2846.24231",
+            "state": "filled",
+            "cTime": "1699998150000",
+            "uTime": "1699998150000",
+        },
+        source="test",
+    )
+
+    sell_id = build_cl_ord_id("bot6", "sell")
+    state.set_order_reason(cl_ord_id=sell_id, reason="rebalance_open_long")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "sell",
+            "ordId": "s1",
+            "clOrdId": sell_id,
+            "px": "1.0004",
+            "fillPx": "1.0004",
+            "sz": "100",
+            "accFillSz": "100",
+            "state": "filled",
+            "cTime": "1700000010000",
+            "uTime": "1700000010000",
+        },
+        source="test",
+    )
+
+    state.set_book(
+        BookSnapshot(
+            ts_ms=2,
+            bids=[BookLevel(price=Decimal("1.0000"), size=Decimal("100000"))],
+            asks=[BookLevel(price=Decimal("1.0001"), size=Decimal("100000"))],
+        )
+    )
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is None
+    assert decision.ask is not None
+    assert decision.ask.reason == "rebalance_open_long"
+    assert decision.ask.price == Decimal("1.0001")
+    assert decision.ask.base_size == Decimal("746.24231")
+    assert decision.reason == "sell_drought_rebalance_sell_only"
+
+
+def test_strategy_drought_release_extra_negative_ticks_caps_at_three_for_both_sides(monkeypatch):
+    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_007_200_000)
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+            sell_drought_guard_enabled=True,
+            sell_drought_inventory_ratio_pct=Decimal("0.60"),
+            sell_drought_rebalance_window_seconds=1800,
+        ),
+        TradingConfig(entry_base_size=Decimal("1000"), quote_size=Decimal("1000"), order_ttl_seconds=6),
+    )
+
+    sell_state = build_state("18000", "7000")
+    sell_buy_id = build_cl_ord_id("bot6", "buy")
+    sell_state.set_order_reason(cl_ord_id=sell_buy_id, reason="join_best_bid")
+    sell_state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "b1",
+            "clOrdId": sell_buy_id,
+            "px": "1.0005",
+            "fillPx": "1.0005",
+            "sz": "2000",
+            "accFillSz": "2000",
+            "state": "filled",
+            "cTime": "1700000020000",
+            "uTime": "1700000020000",
+        },
+        source="test",
+    )
+    sell_sell_id = build_cl_ord_id("bot6", "sell")
+    sell_state.set_order_reason(cl_ord_id=sell_sell_id, reason="rebalance_open_long")
+    sell_state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "sell",
+            "ordId": "s1",
+            "clOrdId": sell_sell_id,
+            "px": "1.0004",
+            "fillPx": "1.0004",
+            "sz": "1000",
+            "accFillSz": "1000",
+            "state": "filled",
+            "cTime": "1700000010000",
+            "uTime": "1700000010000",
+        },
+        source="test",
+    )
+    assert strategy._drought_release_extra_negative_ticks(
+        state=sell_state,
+        side="sell",
+        rebalance_base=Decimal("1000"),
+        rebalance_mode="release",
+    ) == 3
+
+    buy_state = build_state("7000", "18000")
+    buy_sell_id = build_cl_ord_id("bot6", "sell")
+    buy_state.set_order_reason(cl_ord_id=buy_sell_id, reason="join_best_ask")
+    buy_state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "sell",
+            "ordId": "s2",
+            "clOrdId": buy_sell_id,
+            "px": "0.9995",
+            "fillPx": "0.9995",
+            "sz": "2000",
+            "accFillSz": "2000",
+            "state": "filled",
+            "cTime": "1700000020000",
+            "uTime": "1700000020000",
+        },
+        source="test",
+    )
+    buy_buy_id = build_cl_ord_id("bot6", "buy")
+    buy_state.set_order_reason(cl_ord_id=buy_buy_id, reason="rebalance_open_short")
+    buy_state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "b2",
+            "clOrdId": buy_buy_id,
+            "px": "0.9996",
+            "fillPx": "0.9996",
+            "sz": "1000",
+            "accFillSz": "1000",
+            "state": "filled",
+            "cTime": "1700000010000",
+            "uTime": "1700000010000",
+        },
+        source="test",
+    )
+    assert strategy._drought_release_extra_negative_ticks(
+        state=buy_state,
+        side="buy",
+        rebalance_base=Decimal("1000"),
+        rebalance_mode="release",
+    ) == 3
+
+
+def test_strategy_drought_release_extra_negative_ticks_stays_zero_when_guard_is_inactive(monkeypatch):
+    monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_000_030_000)
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+            sell_drought_guard_enabled=True,
+            sell_drought_inventory_ratio_pct=Decimal("0.58"),
+            sell_drought_rebalance_window_seconds=60,
+        ),
+        TradingConfig(entry_base_size=Decimal("1000"), quote_size=Decimal("1000")),
+    )
+    state = build_state("18000", "7000")
+
+    sell_id = build_cl_ord_id("bot6", "sell")
+    state.set_order_reason(cl_ord_id=sell_id, reason="rebalance_open_long")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "sell",
+            "ordId": "s1",
+            "clOrdId": sell_id,
+            "px": "1.0001",
+            "fillPx": "1.0001",
+            "sz": "1000",
+            "accFillSz": "1000",
+            "state": "filled",
+            "cTime": "1700000001000",
+            "uTime": "1700000001000",
+        },
+        source="test",
+    )
+
+    buy_id = build_cl_ord_id("bot6", "buy")
+    state.set_order_reason(cl_ord_id=buy_id, reason="join_best_bid")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "b1",
+            "clOrdId": buy_id,
+            "px": "0.9999",
+            "fillPx": "0.9999",
+            "sz": "2000",
+            "accFillSz": "2000",
+            "state": "filled",
+            "cTime": "1700000002000",
+            "uTime": "1700000002000",
+        },
+        source="test",
+    )
+
+    assert strategy._drought_release_extra_negative_ticks(
+        state=state,
+        side="sell",
+        rebalance_base=Decimal("1000"),
+        rebalance_mode="release",
+    ) == 0
 
 
 def test_strategy_release_sell_respects_thin_bid_depth_budget(monkeypatch):

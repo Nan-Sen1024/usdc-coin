@@ -80,6 +80,8 @@ def test_status_panel_builds_readable_snapshot():
     assert "状态=报价中" in text
     assert "原因=双边报价" in text
     assert "成交次数=3" in text
+    assert "策略回撤(U)=0" in text
+    assert "账户回撤(U)=0" in text
     assert "已实现(U)=+1.25" in text
     assert "市场成交 | 方向=买 价格=1.0001 数量=50 成交ID=mkt-1" in text
     assert "买单 价格=0.9999 数量=10000" in text
@@ -132,6 +134,7 @@ def test_status_panel_marks_demo_live_mode_in_chinese():
 
     assert "模式=OKX模拟盘" in text
     assert "本轮盈亏(U)=" in text
+    assert "账户权益(U)=" in text
     assert "市场成交 | 方向=卖 价格=1 数量=123 成交ID=market-2" in text
 
 
@@ -200,8 +203,84 @@ def test_status_panel_shows_live_realized_and_unrealized_pnl():
     assert "已实现(U)=0" in text
     assert "库存浮盈(U)=+0.5" in text
     assert "待回补仓位(USDC)=+10000" in text
+    assert "策略回撤(U)=0" in text
     assert "成交后回补，只挂卖单" in text
     assert f"最近成交 | 方向=买 委托价=1 成交价=1 数量=10000 订单号={buy_id}" in text
+
+
+def test_status_panel_shows_separate_strategy_and_account_drawdowns():
+    state = BotState(managed_prefix="bot6", state_path="data/test_state.json")
+    state.set_instrument(
+        InstrumentMeta(
+            inst_id="USDC-USDT",
+            inst_type="SPOT",
+            base_ccy="USDC",
+            quote_ccy="USDT",
+            tick_size=Decimal("0.0001"),
+            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
+            max_market_amount=Decimal("1000000"),
+            max_limit_amount=Decimal("20000000"),
+        )
+    )
+    state.set_book(
+        BookSnapshot(
+            ts_ms=10,
+            received_ms=10,
+            bids=[BookLevel(price=Decimal("1.0000"), size=Decimal("1000"))],
+            asks=[BookLevel(price=Decimal("1.0001"), size=Decimal("1000"))],
+        )
+    )
+    state.set_balances(
+        {
+            "USDC": Balance(ccy="USDC", total=Decimal("10000"), available=Decimal("10000")),
+            "USDT": Balance(ccy="USDT", total=Decimal("10000"), available=Decimal("10000")),
+        }
+    )
+    state.apply_account_update(
+        {
+            "totalEq": "33010",
+            "details": [
+                {"ccy": "USDC", "cashBal": "10000", "availBal": "10000"},
+                {"ccy": "USDT", "cashBal": "10000", "availBal": "10000"},
+            ],
+        }
+    )
+    state.set_book(
+        BookSnapshot(
+            ts_ms=11,
+            received_ms=11,
+            bids=[BookLevel(price=Decimal("0.9999"), size=Decimal("1000"))],
+            asks=[BookLevel(price=Decimal("1.0000"), size=Decimal("1000"))],
+        )
+    )
+    state.apply_account_update(
+        {
+            "totalEq": "33001.3",
+            "details": [
+                {"ccy": "USDC", "cashBal": "10000", "availBal": "10000"},
+                {"ccy": "USDT", "cashBal": "10000", "availBal": "10000"},
+            ],
+        }
+    )
+    state.runtime_state = "QUOTING"
+    state.runtime_reason = "sell_drought_rebalance_sell_only"
+
+    panel = TerminalStatusPanel(
+        config=TelemetryConfig(status_panel_enabled=True, status_panel_render_non_interactive=True),
+        mode="live",
+        simulated=False,
+    )
+    decision = QuoteDecision(reason="sell_drought_rebalance_sell_only", bid=None, ask=None)
+    risk = RiskStatus(ok=True, reason="ok", allow_bid=False, allow_ask=True)
+
+    text = panel.build_text(state=state, risk_status=risk, decision=decision)
+
+    assert "策略峰值(U)=20000.5" in text
+    assert "策略回撤(U)=-1" in text
+    assert "账户权益(U)=33001.3" in text
+    assert "账户峰值(U)=33010" in text
+    assert "账户回撤(U)=-8.7" in text
 
 
 def test_status_panel_shows_market_gate_role():

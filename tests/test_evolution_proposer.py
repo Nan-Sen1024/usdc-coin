@@ -94,3 +94,56 @@ def test_proposer_synthesizes_narrow_search_candidate(tmp_path):
     payload = yaml.safe_load(Path(spec_path).read_text(encoding="utf-8"))
     assert len(payload["candidate_experiments"]) == 2
     assert payload["candidate_experiments"][-1]["status"] == "candidate"
+
+
+def test_proposer_replaces_rejected_active_candidate_instead_of_reusing_it(tmp_path):
+    spec_path = _write_spec(tmp_path, candidate_statuses=["candidate", "diagnosis_only"])
+    state_dir = tmp_path / "evolution"
+    store = EvolutionStore(state_dir)
+    store.save_controller_state(
+        ControllerState(
+            phase="idle",
+            failed_rounds=1,
+            last_run_id="run-1",
+            last_candidate_id="candidate-1",
+            last_decision="reject",
+            last_decision_reason="candidate failed",
+            last_cycle_at="2026-04-01T00:00:00+00:00",
+            next_action="generate_next_candidate",
+        )
+    )
+
+    result = propose_next_candidate(spec_path=spec_path, state_dir=state_dir)
+
+    assert result.action == "activated_existing"
+    assert result.candidate is not None
+    assert result.candidate.id == "candidate-2"
+    payload = yaml.safe_load(Path(spec_path).read_text(encoding="utf-8"))
+    assert payload["candidate_experiments"][0]["status"] == "rejected"
+    assert payload["candidate_experiments"][1]["status"] == "candidate"
+
+
+def test_proposer_skips_when_controller_is_interrupted(tmp_path):
+    spec_path = _write_spec(tmp_path, candidate_statuses=["candidate"])
+    state_dir = tmp_path / "evolution"
+    store = EvolutionStore(state_dir)
+    store.save_controller_state(
+        ControllerState(
+            phase="interrupted",
+            failed_rounds=0,
+            last_run_id="run-1",
+            last_candidate_id="candidate-1",
+            last_decision="interrupt",
+            last_decision_reason="hard stop",
+            last_cycle_at="2026-04-01T00:00:00+00:00",
+            next_action="investigate_hard_stop",
+        )
+    )
+
+    result = propose_next_candidate(spec_path=spec_path, state_dir=state_dir)
+
+    assert result.action == "skipped"
+    assert result.candidate is not None
+    assert result.candidate.id == "candidate-1"
+    payload = yaml.safe_load(Path(spec_path).read_text(encoding="utf-8"))
+    assert payload["candidate_experiments"][0]["status"] == "candidate"

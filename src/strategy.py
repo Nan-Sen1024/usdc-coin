@@ -1426,20 +1426,38 @@ class MicroMakerStrategy:
     ) -> int:
         if rebalance_mode != "release":
             return 0
+        window_ms = int(max(self.config.sell_drought_rebalance_window_seconds, 0) * 1000)
+        if window_ms <= 0:
+            return 0
         inventory_ratio = state.inventory_ratio()
+        drought_active = False
+        fill_age_ms = None
         if side == "sell":
-            return 1 if self._sell_drought_guard_active(
+            drought_active = self._sell_drought_guard_active(
                 state=state,
                 inventory_ratio=inventory_ratio,
                 rebalance_sell_base=rebalance_base,
-            ) else 0
-        if side == "buy":
-            return 1 if self._buy_drought_guard_active(
+            )
+            fill_age_ms = state.managed_fill_age_ms(
+                side="sell",
+                reason_bucket="rebalance",
+                reference_ms=now_ms(),
+            )
+        elif side == "buy":
+            drought_active = self._buy_drought_guard_active(
                 state=state,
                 inventory_ratio=inventory_ratio,
                 rebalance_buy_base=rebalance_base,
-            ) else 0
-        return 0
+            )
+            fill_age_ms = state.managed_fill_age_ms(
+                side="buy",
+                reason_bucket="rebalance",
+                reference_ms=now_ms(),
+            )
+        if not drought_active or fill_age_ms is None:
+            return 0
+        drought_steps = max(fill_age_ms // window_ms, 1)
+        return min(int(drought_steps), 3)
 
     def _competitive_rebalance_base_size(
         self,

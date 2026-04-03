@@ -9,6 +9,20 @@ from typing import Any
 import yaml
 
 
+ACTIVE_CANDIDATE_STATUSES = {
+    "candidate",
+    "in_progress",
+    "shadow",
+    "paper",
+    "live_candidate",
+    "challenger_coded_locally_not_deployed",
+    "challenger_seeded",
+    "ready_for_shadow",
+    "ready_for_paper",
+    "deployed_shadow",
+}
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -176,20 +190,8 @@ class EvolutionSpec:
         )
 
     def active_candidate(self) -> CandidateExperiment | None:
-        active_statuses = {
-            "candidate",
-            "in_progress",
-            "shadow",
-            "paper",
-            "live_candidate",
-            "challenger_coded_locally_not_deployed",
-            "challenger_seeded",
-            "ready_for_shadow",
-            "ready_for_paper",
-            "deployed_shadow",
-        }
         for candidate in self.candidate_experiments:
-            if candidate.id and candidate.status in active_statuses:
+            if candidate.id and candidate.status in ACTIVE_CANDIDATE_STATUSES:
                 return candidate
         return None
 

@@ -59,6 +59,11 @@ class TerminalStatusPanel:
         inventory_ratio = state.inventory_ratio()
         nav = state.nav_quote()
         day_pnl = state.daily_pnl_quote()
+        strategy_peak = state.strategy_nav_peak_quote
+        strategy_drawdown = state.strategy_drawdown_quote()
+        account_equity = state.account_equity_quote()
+        account_peak = state.account_total_eq_peak_quote
+        account_drawdown = state.account_drawdown_quote()
         shadow_unrealized = state.shadow_unrealized_pnl_quote()
         live_realized = state.live_realized_pnl_quote
         live_unrealized = state.live_unrealized_pnl_quote()
@@ -71,6 +76,13 @@ class TerminalStatusPanel:
             f"策略净值(U)={self._fmt_dec(nav)}",
             f"本轮盈亏(U)={self._fmt_signed(day_pnl)}",
             f"成交次数={fill_count}",
+        ]
+        drawdown_parts = [
+            f"策略峰值(U)={self._fmt_dec(strategy_peak)}",
+            f"策略回撤(U)={self._fmt_signed(strategy_drawdown)}",
+            f"账户权益(U)={self._fmt_dec(account_equity)}",
+            f"账户峰值(U)={self._fmt_dec(account_peak)}",
+            f"账户回撤(U)={self._fmt_signed(account_drawdown)}",
         ]
         if self.mode == "shadow":
             pnl_parts.append(f"已实现(U)={self._fmt_signed(state.shadow_realized_pnl_quote)}")
@@ -112,6 +124,7 @@ class TerminalStatusPanel:
         lines.extend(
             [
                 "盈亏 | " + " ".join(pnl_parts),
+                "回撤 | " + " ".join(drawdown_parts),
                 (
                     "策略 | "
                     f"库存占比={self._fmt_pct(inventory_ratio)} "

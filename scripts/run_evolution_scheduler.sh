@@ -39,8 +39,13 @@ fi
 
 mkdir -p "$EVOLUTION_STATE_DIR"
 
+STEP_TOTAL=4
+if [[ "$DISPATCH_MODE" == "off" ]]; then
+  STEP_TOTAL=2
+fi
+
 echo "Using Python interpreter: ${PYTHON_CMD[*]}"
-echo "[1/2] Run one evolution cycle"
+echo "[1/$STEP_TOTAL] Run one evolution cycle"
 "${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
   --config "$CONFIG_PATH" \
   --evolution-spec "$EVOLUTION_SPEC" \
@@ -48,25 +53,51 @@ echo "[1/2] Run one evolution cycle"
   --evolution-cycle
 
 if [[ "$DISPATCH_MODE" == "off" ]]; then
-  echo "[2/2] Dispatch skipped because DISPATCH_MODE=off"
+  echo "[2/$STEP_TOTAL] Dispatch skipped because DISPATCH_MODE=off"
   exit 0
 fi
 
-echo "[2/3] Propose or reuse the next candidate when needed"
-"${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
-  --config "$CONFIG_PATH" \
-  --evolution-spec "$EVOLUTION_SPEC" \
-  --evolution-state-dir "$EVOLUTION_STATE_DIR" \
-  --evolution-propose-candidate || true
+readarray -t PREPARE_STATE < <("${PYTHON_CMD[@]}" - "$EVOLUTION_STATE_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-echo "[3/3] Seed candidate bundle if an active candidate exists"
-"${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
-  --config "$CONFIG_PATH" \
-  --evolution-spec "$EVOLUTION_SPEC" \
-  --evolution-state-dir "$EVOLUTION_STATE_DIR" \
-  --evolution-seed-candidate || true
+state_path = Path(sys.argv[1]) / "controller_state.json"
+payload = {}
+if state_path.exists():
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+phase = str(payload.get("phase") or "")
+next_action = str(payload.get("next_action") or "")
+should_prepare = phase != "interrupted" and next_action in {
+    "generate_next_candidate",
+    "narrow_search",
+    "prepare_next_challenger",
+}
+print("yes" if should_prepare else "no")
+print(f"phase={phase or 'none'}, next_action={next_action or 'none'}")
+PY
+)
 
-echo "[4/4] Evaluate worker dispatch"
+if [[ "${PREPARE_STATE[0]:-no}" == "yes" ]]; then
+  echo "[2/$STEP_TOTAL] Propose or reuse the next candidate when needed"
+  "${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
+    --config "$CONFIG_PATH" \
+    --evolution-spec "$EVOLUTION_SPEC" \
+    --evolution-state-dir "$EVOLUTION_STATE_DIR" \
+    --evolution-propose-candidate || true
+
+  echo "[3/$STEP_TOTAL] Seed candidate bundle if an active candidate exists"
+  "${PYTHON_CMD[@]}" "$ROOT_DIR/main.py" \
+    --config "$CONFIG_PATH" \
+    --evolution-spec "$EVOLUTION_SPEC" \
+    --evolution-state-dir "$EVOLUTION_STATE_DIR" \
+    --evolution-seed-candidate || true
+else
+  echo "[2/$STEP_TOTAL] Candidate proposal skipped: ${PREPARE_STATE[1]:-phase=none, next_action=none}"
+  echo "[3/$STEP_TOTAL] Candidate bundle seeding skipped: ${PREPARE_STATE[1]:-phase=none, next_action=none}"
+fi
+
+echo "[4/$STEP_TOTAL] Evaluate worker dispatch"
 DISPATCH_FLAG="--evolution-dispatch"
 if [[ "$DISPATCH_MODE" == "plan" ]]; then
   DISPATCH_FLAG="--evolution-dispatch-plan"

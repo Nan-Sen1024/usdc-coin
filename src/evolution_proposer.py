@@ -7,14 +7,30 @@ from typing import Any
 
 import yaml
 
-from .evolution_models import CandidateExperiment, EvolutionSpec, ExperimentRecord, utc_now_iso
+from .evolution_models import (
+    ACTIVE_CANDIDATE_STATUSES,
+    CandidateExperiment,
+    EvolutionSpec,
+    ExperimentRecord,
+    utc_now_iso,
+)
 from .evolution_store import EvolutionStore
+
+PREPARE_NEXT_ACTIONS = {"generate_next_candidate", "narrow_search", "prepare_next_challenger"}
+SKIP_PROPOSAL_ACTIONS = {
+    "wait_for_more_samples",
+    "keep_collecting_shadow_or_paper_results",
+    "mark_candidate_as_champion",
+    "restore_telemetry_inputs",
+    "investigate_hard_stop",
+    "await_operator_or_data_fix",
+}
 
 
 @dataclass(frozen=True)
 class CandidateProposalResult:
     spec_path: str
-    candidate: CandidateExperiment
+    candidate: CandidateExperiment | None
     action: str
     reason: str
 
@@ -22,25 +38,39 @@ class CandidateProposalResult:
 def propose_next_candidate(*, spec_path: str | Path, state_dir: str | Path) -> CandidateProposalResult:
     spec = EvolutionSpec.load(spec_path)
     store = EvolutionStore(state_dir)
+    controller_state = store.load_controller_state()
+    next_action = controller_state.next_action
     active_candidate = spec.active_candidate()
-    if active_candidate is not None:
+    if controller_state.phase == "interrupted" or next_action in SKIP_PROPOSAL_ACTIONS:
+        result = CandidateProposalResult(
+            spec_path=str(spec_path),
+            candidate=active_candidate,
+            action="skipped",
+            reason=(
+                "Controller currently requires intervention before preparing another candidate "
+                f"(phase={controller_state.phase}, next_action={next_action or 'none'})."
+            ),
+        )
+        _append_proposal_record(
+            store=store,
+            result=result,
+            candidate_id=active_candidate.id if active_candidate is not None else None,
+            next_action=next_action,
+        )
+        return result
+
+    if active_candidate is not None and next_action not in PREPARE_NEXT_ACTIONS:
         result = CandidateProposalResult(
             spec_path=str(spec_path),
             candidate=active_candidate,
             action="reuse_active",
             reason=f"Active candidate {active_candidate.id} already exists; no new proposal was required.",
         )
-        store.append_experiment(
-            ExperimentRecord(
-                ts=utc_now_iso(),
-                action="propose_candidate",
-                status="reused",
-                reason=result.reason,
-                candidate_id=active_candidate.id,
-                trigger_decision=store.load_controller_state().last_decision,
-                next_action=store.load_controller_state().next_action,
-                details={},
-            )
+        _append_proposal_record(
+            store=store,
+            result=result,
+            candidate_id=active_candidate.id,
+            next_action=next_action,
         )
         return result
 
@@ -49,7 +79,9 @@ def propose_next_candidate(*, spec_path: str | Path, state_dir: str | Path) -> C
     if not isinstance(candidates, list):
         raise ValueError("candidate_experiments must be a list in strategy-evolution.yaml")
 
-    controller_state = store.load_controller_state()
+    if next_action in PREPARE_NEXT_ACTIONS:
+        _retire_active_candidates(candidates, replacement_status=_replacement_status(controller_state.last_decision))
+
     if controller_state.next_action == "narrow_search":
         candidate_payload = _build_narrow_search_candidate(payload=payload, candidates=candidates, controller_state=controller_state)
         action = "synthesized_narrow_search"
@@ -70,17 +102,12 @@ def propose_next_candidate(*, spec_path: str | Path, state_dir: str | Path) -> C
         action=action,
         reason=f"Prepared candidate {candidate.id} with status={candidate.status}.",
     )
-    store.append_experiment(
-        ExperimentRecord(
-            ts=utc_now_iso(),
-            action="propose_candidate",
-            status=action,
-            reason=result.reason,
-            candidate_id=candidate.id,
-            trigger_decision=controller_state.last_decision,
-            next_action=controller_state.next_action,
-            details={"spec_path": str(spec_path)},
-        )
+    _append_proposal_record(
+        store=store,
+        result=result,
+        candidate_id=candidate.id,
+        next_action=next_action,
+        details={"spec_path": str(spec_path)},
     )
     return result
 
@@ -90,9 +117,9 @@ def render_candidate_proposal(result: CandidateProposalResult) -> str:
         "Evolution Candidate Proposal",
         f"action: {result.action}",
         f"reason: {result.reason}",
-        f"candidate_id: {result.candidate.id}",
-        f"status: {result.candidate.status}",
-        f"change_surface: {', '.join(result.candidate.change_surface) if result.candidate.change_surface else 'none'}",
+        f"candidate_id: {result.candidate.id if result.candidate is not None else 'none'}",
+        f"status: {result.candidate.status if result.candidate is not None else 'none'}",
+        f"change_surface: {', '.join(result.candidate.change_surface) if result.candidate and result.candidate.change_surface else 'none'}",
     ]
     return "\n".join(lines)
 
@@ -202,6 +229,52 @@ def _default_change_surface(payload: dict[str, Any]) -> list[str]:
     allowed = mutation_surface.get("allowed") or []
     values = [str(item) for item in allowed if item]
     return values[:2] if values else ["parameters"]
+
+
+def _append_proposal_record(
+    *,
+    store: EvolutionStore,
+    result: CandidateProposalResult,
+    candidate_id: str | None,
+    next_action: str | None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    store.append_experiment(
+        ExperimentRecord(
+            ts=utc_now_iso(),
+            action="propose_candidate",
+            status=_proposal_status(result.action),
+            reason=result.reason,
+            candidate_id=candidate_id,
+            trigger_decision=store.load_controller_state().last_decision,
+            next_action=next_action,
+            details=details or {},
+        )
+    )
+
+
+def _proposal_status(action: str) -> str:
+    if action == "reuse_active":
+        return "reused"
+    return action
+
+
+def _replacement_status(last_decision: str | None) -> str:
+    mapping = {
+        "reject": "rejected",
+        "promote": "promoted",
+        "rollback": "rolled_back",
+    }
+    return mapping.get(last_decision or "", "superseded_not_selected")
+
+
+def _retire_active_candidates(candidates: list[dict[str, Any]], *, replacement_status: str) -> None:
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        status = str(candidate.get("status") or "")
+        if status in ACTIVE_CANDIDATE_STATUSES:
+            candidate["status"] = replacement_status
 
 
 def _next_candidate_id(*, base: str, candidates: list[dict[str, Any]]) -> str:
