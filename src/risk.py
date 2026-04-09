@@ -63,6 +63,17 @@ class RiskManager:
                 runtime_state="PAUSED",
             )
 
+        if self.mode == "live" and self.config.require_private_stream_ready:
+            private_stream_age_ms = state.stream_activity_age_ms("private_user")
+            if private_stream_age_ms is not None and private_stream_age_ms > self.config.stale_book_ms:
+                return RiskStatus(
+                    ok=False,
+                    reason=f"stale private stream: {private_stream_age_ms}ms",
+                    allow_bid=False,
+                    allow_ask=False,
+                    runtime_state="PAUSED",
+                )
+
         reconnect_count = state.reconnect_count_5m()
         if reconnect_count > self.config.max_reconnects_per_5m and not state.streams_ready(
             require_public=self.config.require_public_stream_ready,

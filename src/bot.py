@@ -800,18 +800,29 @@ class TrendBot6:
     def _refresh_entry_profit_density_signal(self) -> None:
         if not self.config.strategy.entry_profit_density_enabled:
             self.state.set_entry_profit_density(per10k=None, size_factor=Decimal("1"))
+            for side in ("buy", "sell"):
+                self.state.set_entry_profit_density_by_side(side=side, per10k=None, size_factor=Decimal("1"))
             return
         turnover, realized = self._compute_profit_density_window(reason_bucket="entry", window_minutes=self.config.strategy.entry_profit_density_window_minutes)
+        by_side = self._compute_profit_density_window_by_opening_side(
+            reason_bucket="entry",
+            window_minutes=self.config.strategy.entry_profit_density_window_minutes,
+        )
 
         per10k = None
         size_factor = Decimal("1")
         if turnover > 0:
             per10k = (realized / turnover) * Decimal("10000")
-            if per10k <= self.config.strategy.entry_profit_density_hard_per10k:
-                size_factor = self.config.strategy.entry_profit_density_hard_size_factor
-            elif per10k <= self.config.strategy.entry_profit_density_soft_per10k:
-                size_factor = self.config.strategy.entry_profit_density_soft_size_factor
+            size_factor = self._entry_profit_density_size_factor_for_per10k(per10k)
         self.state.set_entry_profit_density(per10k=per10k, size_factor=size_factor)
+        for side in ("buy", "sell"):
+            side_turnover, side_realized = by_side[side]
+            side_per10k = None
+            side_size_factor = Decimal("1")
+            if side_turnover > 0:
+                side_per10k = (side_realized / side_turnover) * Decimal("10000")
+                side_size_factor = self._entry_profit_density_size_factor_for_per10k(side_per10k)
+            self.state.set_entry_profit_density_by_side(side=side, per10k=side_per10k, size_factor=side_size_factor)
 
     def _refresh_rebalance_profit_density_signal(self) -> None:
         if not self.config.strategy.rebalance_profit_density_enabled:
@@ -912,6 +923,101 @@ class TrendBot6:
                     if remaining > 0:
                         lots.append({"qty": -remaining, "price": fill_price})
         return turnover, realized
+
+    def _compute_profit_density_window_by_opening_side(
+        self,
+        *,
+        reason_bucket: str,
+        window_minutes: int,
+    ) -> dict[str, tuple[Decimal, Decimal]]:
+        journal_path = Path(self.config.telemetry.journal_path)
+        empty = {"buy": (Decimal("0"), Decimal("0")), "sell": (Decimal("0"), Decimal("0"))}
+        if not journal_path.exists():
+            return empty
+
+        cutoff_ms = 0
+        if window_minutes > 0:
+            cutoff_ms = now_ms() - (int(window_minutes) * 60 * 1000)
+
+        turnover_by_side = {"buy": Decimal("0"), "sell": Decimal("0")}
+        realized_by_side = {"buy": Decimal("0"), "sell": Decimal("0")}
+        lots: list[dict[str, Decimal | str]] = []
+        prev_filled_by_order: dict[str, Decimal] = {}
+        with journal_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    continue
+                if record.get("event") != "order_update":
+                    continue
+                payload = record.get("payload") or {}
+                if str(payload.get("reason_bucket") or "") != reason_bucket:
+                    continue
+                order = payload.get("order") or {}
+                cl_ord_id = str(
+                    order.get("cl_ord_id")
+                    or order.get("clOrdId")
+                    or order.get("ord_id")
+                    or order.get("ordId")
+                    or ""
+                )
+                filled_size = Decimal(str(order.get("filled_size") or "0"))
+                previous_filled = prev_filled_by_order.get(cl_ord_id, Decimal("0")) if cl_ord_id else Decimal("0")
+                if cl_ord_id:
+                    prev_filled_by_order[cl_ord_id] = filled_size
+                fill_delta = filled_size - previous_filled
+                if fill_delta <= 0:
+                    continue
+
+                raw = payload.get("raw") or {}
+                fill_price = Decimal(str(raw.get("fillPx") or order.get("price") or "0"))
+                side = str(order.get("side") or "")
+                if fill_price <= 0 or side not in {"buy", "sell"}:
+                    continue
+
+                record_ts_ms = int(record.get("ts_ms") or 0)
+                in_window = cutoff_ms <= 0 or record_ts_ms <= 0 or record_ts_ms >= cutoff_ms
+                if in_window:
+                    turnover_by_side[side] += fill_delta * fill_price
+
+                remaining = fill_delta
+                if side == "buy":
+                    while remaining > 0 and lots and Decimal(lots[0]["qty"]) < 0:
+                        lot = lots[0]
+                        matched = min(remaining, -Decimal(lot["qty"]))
+                        if in_window:
+                            realized_by_side[str(lot["opening_side"])] += matched * (Decimal(lot["price"]) - fill_price)
+                        lot["qty"] = Decimal(lot["qty"]) + matched
+                        remaining -= matched
+                        if Decimal(lot["qty"]) == 0:
+                            lots.pop(0)
+                    if remaining > 0:
+                        lots.append({"qty": remaining, "price": fill_price, "opening_side": side})
+                else:
+                    while remaining > 0 and lots and Decimal(lots[0]["qty"]) > 0:
+                        lot = lots[0]
+                        matched = min(remaining, Decimal(lot["qty"]))
+                        if in_window:
+                            realized_by_side[str(lot["opening_side"])] += matched * (fill_price - Decimal(lot["price"]))
+                        lot["qty"] = Decimal(lot["qty"]) - matched
+                        remaining -= matched
+                        if Decimal(lot["qty"]) == 0:
+                            lots.pop(0)
+                    if remaining > 0:
+                        lots.append({"qty": -remaining, "price": fill_price, "opening_side": side})
+
+        return {
+            "buy": (turnover_by_side["buy"], realized_by_side["buy"]),
+            "sell": (turnover_by_side["sell"], realized_by_side["sell"]),
+        }
+
+    def _entry_profit_density_size_factor_for_per10k(self, per10k: Decimal) -> Decimal:
+        if per10k <= self.config.strategy.entry_profit_density_hard_per10k:
+            return self.config.strategy.entry_profit_density_hard_size_factor
+        if per10k <= self.config.strategy.entry_profit_density_soft_per10k:
+            return self.config.strategy.entry_profit_density_soft_size_factor
+        return Decimal("1")
 
     def _prefer_rest_trade_routing(self) -> bool:
         if self.config.exchange.name == "binance":
@@ -1236,7 +1342,22 @@ class TrendBot6:
             duration_ms=int(self.config.risk.pause_after_reconnect_seconds * 1000),
         )
         self.journal.append("reconnect", {"stream": stream_name})
-        if self.config.mode == "live" and stream_name == "public_books5":
+        if self.config.mode != "live":
+            return
+
+        cancel_reason = self._managed_order_cancel_reason_for_reconnect(stream_name)
+        if cancel_reason is not None:
+            self.journal.append(
+                "reconnect_cancel_all_managed_orders",
+                {
+                    "stream": stream_name,
+                    "cancel_reason": cancel_reason,
+                },
+            )
+            await self.executor.cancel_all_managed_orders(reason=cancel_reason)
+            return
+
+        if stream_name == "public_books5":
             self.journal.append(
                 "public_reconnect_resync_only",
                 {
@@ -1245,6 +1366,13 @@ class TrendBot6:
                     "configured_cancel_on_public_reconnect": self.config.risk.cancel_managed_orders_on_public_reconnect,
                 },
             )
+
+    def _managed_order_cancel_reason_for_reconnect(self, stream_name: str) -> str | None:
+        if stream_name == "private_user":
+            return "private_reconnect"
+        if stream_name == "public_books5" and self.config.risk.cancel_managed_orders_on_public_reconnect:
+            return "public_reconnect"
+        return None
 
     def _book_requote_reason(self, previous_book, current_book) -> str | None:
         if not self.config.trading.event_driven_requote:

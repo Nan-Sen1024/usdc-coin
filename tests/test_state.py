@@ -468,6 +468,9 @@ def test_load_persisted_accounting_restores_live_state(tmp_path):
     state.account_total_eq_quote = Decimal("33010.5")
     state.account_total_eq_peak_quote = Decimal("33018.2")
     state.live_realized_pnl_quote = Decimal("2.2")
+    state.set_entry_profit_density(per10k=Decimal("0.09"), size_factor=Decimal("0.40"))
+    state.set_entry_profit_density_by_side(side="buy", per10k=Decimal("-0.10"), size_factor=Decimal("0.40"))
+    state.set_entry_profit_density_by_side(side="sell", per10k=Decimal("0.25"), size_factor=Decimal("1"))
     state.observed_fill_count = 4
     state.observed_fill_volume_quote = Decimal("2888.8692150357")
     state.initial_external_base_inventory = Decimal("23008.69913")
@@ -495,6 +498,12 @@ def test_load_persisted_accounting_restores_live_state(tmp_path):
     assert restored.account_total_eq_quote == Decimal("33010.5")
     assert restored.account_total_eq_peak_quote == Decimal("33018.2")
     assert restored.live_realized_pnl_quote == Decimal("2.2")
+    assert restored.entry_profit_density_per10k == Decimal("0.09")
+    assert restored.entry_profit_density_size_factor == Decimal("0.40")
+    assert restored.entry_profit_density_per10k_for_side("buy") == Decimal("-0.10")
+    assert restored.entry_profit_density_per10k_for_side("sell") == Decimal("0.25")
+    assert restored.entry_profit_density_size_factor_for_side("buy") == Decimal("0.40")
+    assert restored.entry_profit_density_size_factor_for_side("sell") == Decimal("1")
     assert restored.observed_fill_count == 4
     assert restored.observed_fill_volume_quote == Decimal("2888.8692150357")
     assert restored.initial_external_base_inventory == Decimal("23008.69913")

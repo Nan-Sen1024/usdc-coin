@@ -841,15 +841,33 @@ class OrderExecutor:
     def _should_keep_order_without_intent(self, *, primary: LiveOrder, risk_status: RiskStatus | None) -> bool:
         if risk_status is None:
             return False
+        if self._should_withdraw_managed_order_for_risk(risk_status):
+            return False
         if self.state.has_pending_amend(primary.cl_ord_id):
             return True
         if risk_status.runtime_state in {"INIT", "PAUSED"}:
             return True
-        if risk_status.reason.startswith("stale book:") and not self.config.risk.cancel_orders_on_stale_book:
+        if self._is_stale_market_data_reason(risk_status.reason) and not self.config.risk.cancel_orders_on_stale_book:
             return True
         if primary.filled_size > 0 and risk_status.ok and self._side_allowed_by_risk(primary.side, risk_status):
             return True
         return False
+
+    def _should_withdraw_managed_order_for_risk(self, risk_status: RiskStatus) -> bool:
+        reason = risk_status.reason
+        if reason.startswith("stale public stream:"):
+            return self.config.risk.cancel_orders_on_stale_book
+        if reason.startswith("stale private stream:"):
+            return True
+        if reason.startswith("resync required: private_user reconnected"):
+            return True
+        if reason.startswith("resync required: public_books5 reconnected"):
+            return self.config.risk.cancel_managed_orders_on_public_reconnect
+        return False
+
+    @staticmethod
+    def _is_stale_market_data_reason(reason: str) -> bool:
+        return reason.startswith("stale public stream:")
 
     def _should_keep_existing_order(self, *, primary: LiveOrder, intent, base_size: Decimal) -> bool:
         if self._same_live_order_target(primary=primary, intent=intent, base_size=base_size):

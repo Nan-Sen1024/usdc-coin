@@ -226,13 +226,66 @@ def test_strategy_scales_entry_size_only_when_spread_is_favorable():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.reason == "two_sided"
+    assert decision.reason == "favorable_two_sided"
     assert decision.bid is not None
     assert decision.ask is not None
     assert decision.bid.base_size == Decimal("7500")
     assert decision.ask.base_size == Decimal("7500")
     assert decision.bid_layers[1].base_size == Decimal("7500")
     assert decision.ask_layers[1].base_size == Decimal("7500")
+
+
+def test_strategy_blocks_fresh_entry_when_one_tick_spread_and_entry_quality_is_weak():
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            entry_profit_density_enabled=True,
+            entry_profit_density_soft_per10k=Decimal("0.15"),
+            entry_profit_density_hard_per10k=Decimal("0.05"),
+            entry_profit_density_soft_size_factor=Decimal("0.70"),
+            entry_profit_density_hard_size_factor=Decimal("0.40"),
+        ),
+        TradingConfig(entry_base_size=Decimal("10000")),
+    )
+    state = build_state("50000", "50000")
+    state.entry_profit_density_per10k = Decimal("0.04")
+    state.entry_profit_density_size_factor = Decimal("0.40")
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is None
+    assert decision.ask is None
+    assert decision.reason == "entry_quality_do_not_quote"
+
+
+def test_strategy_uses_side_specific_entry_density_to_keep_good_side_live():
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            entry_profit_density_enabled=True,
+            entry_profit_density_soft_per10k=Decimal("0.15"),
+            entry_profit_density_hard_per10k=Decimal("0.05"),
+            entry_profit_density_soft_size_factor=Decimal("0.70"),
+            entry_profit_density_hard_size_factor=Decimal("0.40"),
+        ),
+        TradingConfig(entry_base_size=Decimal("10000")),
+    )
+    state = build_state("50000", "50000")
+    state.entry_profit_density_per10k = Decimal("0")
+    state.entry_profit_density_size_factor = Decimal("0.40")
+    state.set_entry_profit_density_by_side(side="buy", per10k=Decimal("0.00"), size_factor=Decimal("0.40"))
+    state.set_entry_profit_density_by_side(side="sell", per10k=Decimal("0.30"), size_factor=Decimal("1"))
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is None
+    assert decision.ask is not None
+    assert decision.ask.base_size == Decimal("10000")
+    assert decision.reason == "entry_quality_ask_only"
 
 
 def test_strategy_does_not_scale_entry_size_when_spread_is_one_tick():
@@ -752,13 +805,13 @@ def test_strategy_scales_down_buy_entry_when_recent_buy_markout_is_adverse():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is not None
+    assert decision.bid is None
     assert decision.ask is not None
-    assert decision.bid.base_size == Decimal("5000")
     assert decision.ask.base_size == Decimal("10000")
+    assert decision.reason == "entry_quality_ask_only"
 
 
-def test_strategy_scales_down_entry_when_profit_density_is_weak():
+def test_strategy_blocks_entry_when_profit_density_is_weak_on_one_tick_spread():
     strategy = MicroMakerStrategy(
         StrategyConfig(
             entry_profit_density_enabled=True,
@@ -778,10 +831,9 @@ def test_strategy_scales_down_entry_when_profit_density_is_weak():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is not None
-    assert decision.ask is not None
-    assert decision.bid.base_size == Decimal("4000")
-    assert decision.ask.base_size == Decimal("4000")
+    assert decision.bid is None
+    assert decision.ask is None
+    assert decision.reason == "entry_quality_do_not_quote"
 
 
 def test_strategy_blocks_entry_buy_when_profit_density_is_hard_weak_under_rebalance_sell_pressure():

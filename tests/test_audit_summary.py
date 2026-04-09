@@ -1,11 +1,12 @@
 from pathlib import Path
 import json
 import sys
+from decimal import Decimal
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.audit_store import SQLiteAuditStore
-from src.audit_summary import render_audit_summary
+from src.audit_summary import build_profitability_report, render_audit_summary
 from src.config import BotConfig
 
 
@@ -344,3 +345,96 @@ def test_render_audit_summary_shows_triangle_route_choice(tmp_path):
     assert "主路=direct_sell_usd1usdt" in text
     assert "备路=sell_usd1usdc_then_sell_usdcusdt" in text
     assert "方向=sell" in text
+
+
+def test_build_profitability_report_minimal_metrics(tmp_path):
+    db_path = tmp_path / "audit.db"
+    snapshot_path = tmp_path / "state_snapshot.json"
+
+    store = SQLiteAuditStore(str(db_path))
+    store.open()
+    store.append_event(
+        ts_ms=1000,
+        event="decision",
+        payload={
+            "decision": {
+                "bid_layers": [{"reason": "join_best_bid", "price": "1", "base_size": "100"}],
+                "ask_layers": [{"reason": "rebalance_open_long", "price": "0.9999", "base_size": "100"}],
+            }
+        },
+        run_id="run-fill",
+    )
+    store.append_event(
+        ts_ms=1100,
+        event="place_order",
+        payload={"clOrdId": "buy1", "side": "buy", "px": "1", "sz": "100", "reason": "join_best_bid"},
+        run_id="run-fill",
+    )
+    store.append_event(
+        ts_ms=1200,
+        event="order_update",
+        payload={
+            "order": {"cl_ord_id": "buy1", "side": "buy", "price": "1", "filled_size": "100", "state": "filled"},
+            "raw": {"fillPx": "1"},
+            "reason": "join_best_bid",
+        },
+        run_id="run-fill",
+    )
+    store.append_event(
+        ts_ms=1300,
+        event="amend_order_submitted",
+        payload={"cl_ord_id": "sell1", "reason": "rebalance_open_long", "old_price": "0.9999", "new_price": "0.9999"},
+        run_id="run-fill",
+    )
+    store.append_event(
+        ts_ms=1400,
+        event="cancel_order_terminal",
+        payload={"cl_ord_id": "sell1", "reason": "reprice_or_ttl"},
+        run_id="run-fill",
+    )
+    store.append_event(
+        ts_ms=1500,
+        event="order_update",
+        payload={
+            "order": {"cl_ord_id": "sell1", "side": "sell", "price": "0.9999", "filled_size": "100", "state": "filled"},
+            "raw": {"fillPx": "0.9999"},
+            "reason": "rebalance_open_long",
+        },
+        run_id="run-fill",
+    )
+    store.append_event(
+        ts_ms=2000,
+        event="decision",
+        payload={"decision": {"reason": "inventory_low_bid_only"}},
+        run_id="run-latest",
+    )
+    store.close()
+
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "fill_markout_summary_by_reason": {
+                    "entry": {"300": {"samples": 2, "avg_adverse_ticks": "0.3"}},
+                    "rebalance": {"300": {"samples": 1, "avg_adverse_ticks": "1.2"}},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = BotConfig(mode="live")
+    config.telemetry.sqlite_path = str(db_path)
+    config.telemetry.state_path = str(snapshot_path)
+
+    report = build_profitability_report(config, title="latest filled", run_id="run-fill")
+
+    assert report.fill_count == 2
+    assert report.turnover_quote == Decimal("199.99")
+    assert report.realized_pnl_quote == Decimal("-0.01")
+    assert report.cancel_after_terminal_rate == Decimal("1")
+    assert report.same_price_amend_rate == Decimal("1")
+    assert report.largest_turnover_action_class == "entry"
+    assert report.worst_realized_action_class == "rebalance"
+    assert any(item.action_class == "entry" for item in report.action_summaries)
+    assert any(item.action_class == "rebalance" for item in report.action_summaries)

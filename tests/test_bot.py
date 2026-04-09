@@ -641,6 +641,51 @@ def test_bot_refreshes_entry_profit_density_signal_from_recent_journal(tmp_path)
     assert bot.state.entry_profit_density_size_factor == Decimal("0.40")
 
 
+def test_bot_refreshes_side_specific_entry_profit_density_signal_from_recent_journal(tmp_path):
+    config = BotConfig(mode="live")
+    config.exchange.name = "binance"
+    config.strategy.entry_profit_density_enabled = True
+    config.strategy.entry_profit_density_window_minutes = 60
+    config.strategy.entry_profit_density_soft_per10k = Decimal("0.15")
+    config.strategy.entry_profit_density_hard_per10k = Decimal("0.05")
+    config.strategy.entry_profit_density_soft_size_factor = Decimal("0.70")
+    config.strategy.entry_profit_density_hard_size_factor = Decimal("0.40")
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.live.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+
+    journal_path = Path(config.telemetry.journal_path)
+    current_ts = now_ms()
+    journal_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"ts_ms": current_ts - 3_000, "run_id": "run1", "event": "order_update", "payload": {"order": {"cl_ord_id": "buy-open", "side": "buy", "price": "1.0001", "filled_size": "1000"}, "raw": {"fillPx": "1.0001"}, "reason": "join_best_bid", "reason_bucket": "entry"}}),
+                json.dumps({"ts_ms": current_ts - 2_000, "run_id": "run1", "event": "order_update", "payload": {"order": {"cl_ord_id": "sell-close-buy", "side": "sell", "price": "1.0000", "filled_size": "1000"}, "raw": {"fillPx": "1.0000"}, "reason": "join_best_ask", "reason_bucket": "entry"}}),
+                json.dumps({"ts_ms": current_ts - 1_000, "run_id": "run1", "event": "order_update", "payload": {"order": {"cl_ord_id": "sell-open", "side": "sell", "price": "1.0001", "filled_size": "1000"}, "raw": {"fillPx": "1.0001"}, "reason": "join_best_ask", "reason_bucket": "entry"}}),
+                json.dumps({"ts_ms": current_ts, "run_id": "run1", "event": "order_update", "payload": {"order": {"cl_ord_id": "buy-close-sell", "side": "buy", "price": "1.0000", "filled_size": "1000"}, "raw": {"fillPx": "1.0000"}, "reason": "join_best_bid", "reason_bucket": "entry"}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bot = TrendBot6(config)
+
+    try:
+        bot._refresh_entry_profit_density_signal()
+    finally:
+        asyncio.run(bot.rest.close())
+        bot.audit_store.close()
+
+    assert bot.state.entry_profit_density_per10k == Decimal("0")
+    assert bot.state.entry_profit_density_size_factor == Decimal("0.40")
+    assert bot.state.entry_profit_density_per10k_for_side("buy") < Decimal("0")
+    assert bot.state.entry_profit_density_size_factor_for_side("buy") == Decimal("0.40")
+    assert bot.state.entry_profit_density_per10k_for_side("sell") > Decimal("0.15")
+    assert bot.state.entry_profit_density_size_factor_for_side("sell") == Decimal("1")
+
+
 def test_bot_refreshes_rebalance_profit_density_signal_from_recent_journal(tmp_path):
     config = BotConfig(mode="live")
     config.exchange.name = "binance"

@@ -100,6 +100,12 @@ class MicroMakerStrategy:
             rebalance_buy_base=rebalance_buy_base,
             rebalance_sell_base=rebalance_sell_base,
         )
+        favorable_entry_regime_active = self._favorable_entry_regime_active(
+            state=state,
+            spread_ticks=spread_ticks,
+            rebalance_buy_base=rebalance_buy_base,
+            rebalance_sell_base=rebalance_sell_base,
+        )
         if favorable_size_multiplier > Decimal("1"):
             bid_quote_size *= favorable_size_multiplier
             ask_quote_size *= favorable_size_multiplier
@@ -175,6 +181,11 @@ class MicroMakerStrategy:
             elif (
                 not bid_toxic_cooldown
                 and not sell_drought_guard_active
+                and not self._entry_suppressed_by_tight_spread_quality(
+                    state=state,
+                    side="buy",
+                    spread_ticks=spread_ticks,
+                )
                 and not self._entry_blocked_by_weak_density(
                     state=state,
                     side="buy",
@@ -186,7 +197,7 @@ class MicroMakerStrategy:
                     state=state,
                     base_size=bid_base_size,
                     quote_notional=bid_quote_size,
-                    factor=self._entry_markout_penalty_factor(state=state, side="buy") * self._entry_profit_density_factor(state=state),
+                    factor=self._entry_markout_penalty_factor(state=state, side="buy") * self._entry_profit_density_factor(state=state, side="buy"),
                 )
                 bid_price = self._entry_bid_price(
                     state=state,
@@ -238,6 +249,11 @@ class MicroMakerStrategy:
                 not ask_toxic_cooldown
                 and rebalance_buy_base <= 0
                 and not buy_drought_guard_active
+                and not self._entry_suppressed_by_tight_spread_quality(
+                    state=state,
+                    side="sell",
+                    spread_ticks=spread_ticks,
+                )
                 and not self._entry_blocked_by_weak_density(
                     state=state,
                     side="sell",
@@ -249,7 +265,7 @@ class MicroMakerStrategy:
                     state=state,
                     base_size=ask_base_size,
                     quote_notional=ask_quote_size,
-                    factor=self._entry_markout_penalty_factor(state=state, side="sell") * self._entry_profit_density_factor(state=state),
+                    factor=self._entry_markout_penalty_factor(state=state, side="sell") * self._entry_profit_density_factor(state=state, side="sell"),
                 )
                 ask_price = self._entry_ask_price(
                     state=state,
@@ -273,23 +289,58 @@ class MicroMakerStrategy:
 
         reason = "two_sided"
         if bid and ask:
-            if rebalance_buy_base > 0:
+            if favorable_entry_regime_active and bid.reason == "join_best_bid" and ask.reason == "join_best_ask":
+                reason = "favorable_two_sided"
+            elif rebalance_buy_base > 0:
                 reason = "fill_rebalance_buy_biased"
             elif rebalance_sell_base > 0:
                 reason = "fill_rebalance_sell_biased"
         elif bid and not ask:
             if buy_drought_guard_active:
                 reason = "buy_drought_rebalance_buy_only" if rebalance_buy_base > 0 else "buy_drought_bid_only"
+            elif rebalance_buy_base > 0:
+                reason = "fill_rebalance_buy_only"
+            elif self._entry_suppressed_by_tight_spread_quality(
+                state=state,
+                side="sell",
+                spread_ticks=spread_ticks,
+            ):
+                reason = "entry_quality_bid_only"
+            elif favorable_entry_regime_active and bid.reason == "join_best_bid":
+                reason = "favorable_bid_only"
             else:
-                reason = "fill_rebalance_buy_only" if rebalance_buy_base > 0 else "inventory_low_bid_only"
+                reason = "inventory_low_bid_only"
         elif ask and not bid:
             if sell_drought_guard_active:
                 reason = "sell_drought_rebalance_sell_only" if rebalance_sell_base > 0 else "sell_drought_ask_only"
+            elif rebalance_sell_base > 0:
+                reason = "fill_rebalance_sell_only"
+            elif self._entry_suppressed_by_tight_spread_quality(
+                state=state,
+                side="buy",
+                spread_ticks=spread_ticks,
+            ):
+                reason = "entry_quality_ask_only"
+            elif favorable_entry_regime_active and ask.reason == "join_best_ask":
+                reason = "favorable_ask_only"
             else:
-                reason = "fill_rebalance_sell_only" if rebalance_sell_base > 0 else "inventory_high_ask_only"
+                reason = "inventory_high_ask_only"
         elif not bid and not ask:
             if suppress_direct_sell_for_route:
                 reason = "route_indirect_release_only"
+            elif (
+                self._entry_suppressed_by_tight_spread_quality(
+                    state=state,
+                    side="buy",
+                    spread_ticks=spread_ticks,
+                )
+                and self._entry_suppressed_by_tight_spread_quality(
+                    state=state,
+                    side="sell",
+                    spread_ticks=spread_ticks,
+                )
+            ):
+                reason = "entry_quality_do_not_quote"
             else:
                 reason = risk_status.reason
 
@@ -538,15 +589,30 @@ class MicroMakerStrategy:
             return base_size, quote_notional
         return scaled_base_size, scaled_quote_notional
 
-    def _entry_profit_density_factor(self, *, state: BotState) -> Decimal:
+    def _entry_profit_density_factor(self, *, state: BotState, side: str) -> Decimal:
         if not self.config.entry_profit_density_enabled:
             return Decimal("1")
-        return min(max(state.entry_profit_density_size_factor, Decimal("0")), Decimal("1"))
+        return min(max(state.entry_profit_density_size_factor_for_side(side), Decimal("0")), Decimal("1"))
 
-    def _entry_hard_density_block_active(self, *, state: BotState) -> bool:
+    def _entry_quality_factor(self, *, state: BotState, side: str) -> Decimal:
+        return self._entry_markout_penalty_factor(state=state, side=side) * self._entry_profit_density_factor(state=state, side=side)
+
+    def _entry_quality_is_weak(self, *, state: BotState, side: str) -> bool:
+        return self._entry_quality_factor(state=state, side=side) < Decimal("1")
+
+    def _entry_suppressed_by_tight_spread_quality(
+        self,
+        *,
+        state: BotState,
+        side: str,
+        spread_ticks: Decimal,
+    ) -> bool:
+        return spread_ticks <= Decimal("1") and self._entry_quality_is_weak(state=state, side=side)
+
+    def _entry_hard_density_block_active(self, *, state: BotState, side: str) -> bool:
         if not self.config.entry_profit_density_enabled:
             return False
-        per10k = state.entry_profit_density_per10k
+        per10k = state.entry_profit_density_per10k_for_side(side)
         if per10k is None:
             return False
         return per10k <= self.config.entry_profit_density_hard_per10k
@@ -559,13 +625,32 @@ class MicroMakerStrategy:
         rebalance_buy_base: Decimal,
         rebalance_sell_base: Decimal,
     ) -> bool:
-        if not self._entry_hard_density_block_active(state=state):
+        if not self._entry_hard_density_block_active(state=state, side=side):
             return False
         if side == "buy":
             return rebalance_sell_base > 0
         if side == "sell":
             return rebalance_buy_base > 0
         return False
+
+    def _favorable_entry_regime_active(
+        self,
+        *,
+        state: BotState,
+        spread_ticks: Decimal,
+        rebalance_buy_base: Decimal,
+        rebalance_sell_base: Decimal,
+    ) -> bool:
+        if self._favorable_size_multiplier(
+            spread_ticks=spread_ticks,
+            rebalance_buy_base=rebalance_buy_base,
+            rebalance_sell_base=rebalance_sell_base,
+        ) <= Decimal("1"):
+            return False
+        return not self._entry_quality_is_weak(state=state, side="buy") and not self._entry_quality_is_weak(
+            state=state,
+            side="sell",
+        )
 
     def _buy_drought_guard_active(
         self,
@@ -715,7 +800,7 @@ class MicroMakerStrategy:
                     state=state,
                     base_size=fixed_entry_base_size,
                     quote_notional=quote_size,
-                    factor=self._entry_markout_penalty_factor(state=state, side="buy") * self._entry_profit_density_factor(state=state),
+                    factor=self._entry_markout_penalty_factor(state=state, side="buy") * self._entry_profit_density_factor(state=state, side="buy"),
                 )
                 bid_price = state.book.best_bid.price
                 if self._triangle_route_allows_entry_buy(state=state, price=bid_price):
@@ -763,7 +848,7 @@ class MicroMakerStrategy:
                     state=state,
                     base_size=fixed_entry_base_size,
                     quote_notional=quote_size,
-                    factor=self._entry_markout_penalty_factor(state=state, side="sell") * self._entry_profit_density_factor(state=state),
+                    factor=self._entry_markout_penalty_factor(state=state, side="sell") * self._entry_profit_density_factor(state=state, side="sell"),
                 )
                 ask_price = state.book.best_ask.price
                 sell_price_floor = self._sell_price_floor(state=state)

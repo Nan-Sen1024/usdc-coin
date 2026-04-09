@@ -60,6 +60,8 @@ class BotState:
         self.live_realized_pnl_quote = Decimal("0")
         self.entry_profit_density_per10k: Decimal | None = None
         self.entry_profit_density_size_factor: Decimal = Decimal("1")
+        self.entry_profit_density_per10k_by_side: dict[str, Decimal | None] = {"buy": None, "sell": None}
+        self.entry_profit_density_size_factor_by_side: dict[str, Decimal] = {"buy": Decimal("1"), "sell": Decimal("1")}
         self.rebalance_profit_density_per10k: Decimal | None = None
         self.rebalance_profit_density_size_factor: Decimal = Decimal("1")
         self.rebalance_profit_density_extra_ticks: int = 0
@@ -123,6 +125,27 @@ class BotState:
     def set_entry_profit_density(self, *, per10k: Decimal | None, size_factor: Decimal) -> None:
         self.entry_profit_density_per10k = per10k
         self.entry_profit_density_size_factor = min(max(size_factor, Decimal("0")), Decimal("1"))
+
+    def set_entry_profit_density_by_side(self, *, side: str, per10k: Decimal | None, size_factor: Decimal) -> None:
+        normalized = str(side or "").lower()
+        if normalized not in {"buy", "sell"}:
+            return
+        self.entry_profit_density_per10k_by_side[normalized] = per10k
+        self.entry_profit_density_size_factor_by_side[normalized] = min(max(size_factor, Decimal("0")), Decimal("1"))
+
+    def entry_profit_density_per10k_for_side(self, side: str) -> Decimal | None:
+        normalized = str(side or "").lower()
+        if normalized in self.entry_profit_density_per10k_by_side:
+            per10k = self.entry_profit_density_per10k_by_side[normalized]
+            if per10k is not None:
+                return per10k
+        return self.entry_profit_density_per10k
+
+    def entry_profit_density_size_factor_for_side(self, side: str) -> Decimal:
+        normalized = str(side or "").lower()
+        if normalized in self.entry_profit_density_size_factor_by_side and self.entry_profit_density_per10k_by_side.get(normalized) is not None:
+            return self.entry_profit_density_size_factor_by_side[normalized]
+        return self.entry_profit_density_size_factor
 
     def set_rebalance_profit_density(self, *, per10k: Decimal | None, size_factor: Decimal, extra_ticks: int) -> None:
         self.rebalance_profit_density_per10k = per10k
@@ -219,6 +242,14 @@ class BotState:
         self.live_realized_pnl_quote = parse_decimal(payload.get("live_realized_pnl_quote") or "0")
         self.entry_profit_density_per10k = self._optional_decimal(payload.get("entry_profit_density_per10k"))
         self.entry_profit_density_size_factor = parse_decimal(payload.get("entry_profit_density_size_factor") or "1")
+        self.entry_profit_density_per10k_by_side = self._restore_optional_decimal_by_side(
+            payload.get("entry_profit_density_per10k_by_side"),
+            fallback=self.entry_profit_density_per10k,
+        )
+        self.entry_profit_density_size_factor_by_side = self._restore_decimal_by_side(
+            payload.get("entry_profit_density_size_factor_by_side"),
+            fallback=self.entry_profit_density_size_factor,
+        )
         self.rebalance_profit_density_per10k = self._optional_decimal(payload.get("rebalance_profit_density_per10k"))
         self.rebalance_profit_density_size_factor = parse_decimal(payload.get("rebalance_profit_density_size_factor") or "1")
         self.rebalance_profit_density_extra_ticks = int(payload.get("rebalance_profit_density_extra_ticks") or 0)
@@ -1222,6 +1253,8 @@ class BotState:
             "live_realized_pnl_quote": self.live_realized_pnl_quote,
             "entry_profit_density_per10k": self.entry_profit_density_per10k,
             "entry_profit_density_size_factor": self.entry_profit_density_size_factor,
+            "entry_profit_density_per10k_by_side": self.entry_profit_density_per10k_by_side,
+            "entry_profit_density_size_factor_by_side": self.entry_profit_density_size_factor_by_side,
             "rebalance_profit_density_per10k": self.rebalance_profit_density_per10k,
             "rebalance_profit_density_size_factor": self.rebalance_profit_density_size_factor,
             "rebalance_profit_density_extra_ticks": self.rebalance_profit_density_extra_ticks,
@@ -1281,6 +1314,22 @@ class BotState:
         if value in (None, "", "null"):
             return None
         return int(value)
+
+    def _restore_optional_decimal_by_side(self, raw, *, fallback: Decimal | None) -> dict[str, Decimal | None]:
+        restored: dict[str, Decimal | None] = {"buy": fallback, "sell": fallback}
+        if not isinstance(raw, dict):
+            return restored
+        for side in ("buy", "sell"):
+            restored[side] = self._optional_decimal(raw.get(side))
+        return restored
+
+    def _restore_decimal_by_side(self, raw, *, fallback: Decimal) -> dict[str, Decimal]:
+        restored: dict[str, Decimal] = {"buy": fallback, "sell": fallback}
+        if not isinstance(raw, dict):
+            return restored
+        for side in ("buy", "sell"):
+            restored[side] = min(max(parse_decimal(raw.get(side) or fallback), Decimal("0")), Decimal("1"))
+        return restored
 
     @staticmethod
     def _parse_trade_tick(value) -> TradeTick | None:
