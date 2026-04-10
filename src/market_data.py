@@ -23,7 +23,7 @@ ActivityCallback = Callable[[str, str], Awaitable[None]]
 
 class PublicBookStream:
     HEARTBEAT_INTERVAL_SECONDS = 5.0
-    RECV_TIMEOUT_SECONDS = 60.0
+    RECV_TIMEOUT_SECONDS = 20.0
 
     def __init__(
         self,
@@ -88,8 +88,9 @@ class PublicBookStream:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=self.RECV_TIMEOUT_SECONDS)
                         except asyncio.TimeoutError:
-                            await ws.send("ping")
-                            continue
+                            raise ConnectionError(
+                                f"No data received from public_books5 in {self.RECV_TIMEOUT_SECONDS}s"
+                            ) from None
                         if raw == "pong":
                             await self._emit_activity("public_books5", "pong")
                             continue

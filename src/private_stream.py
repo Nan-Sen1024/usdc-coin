@@ -19,11 +19,12 @@ RawHandler = Callable[[dict], Awaitable[None]]
 ReconnectHandler = Callable[[str], Awaitable[None]]
 StatusHandler = Callable[[str, bool], Awaitable[None]]
 ErrorHandler = Callable[[str, Exception], Awaitable[None]]
+ActivityHandler = Callable[[str, str], Awaitable[None]]
 
 
 class PrivateUserStream:
-    HEARTBEAT_INTERVAL_SECONDS = 20.0
-    RECV_TIMEOUT_SECONDS = 60.0
+    HEARTBEAT_INTERVAL_SECONDS = 5.0
+    RECV_TIMEOUT_SECONDS = 20.0
     REQUEST_TIMEOUT_SECONDS = 8.0
 
     def __init__(
@@ -38,6 +39,7 @@ class PrivateUserStream:
         on_reconnect: ReconnectHandler | None = None,
         on_status: StatusHandler | None = None,
         on_error: ErrorHandler | None = None,
+        on_activity: ActivityHandler | None = None,
     ):
         self.url = url
         self.signer = signer
@@ -48,6 +50,7 @@ class PrivateUserStream:
         self.on_reconnect = on_reconnect
         self.on_status = on_status
         self.on_error = on_error
+        self.on_activity = on_activity
         self.running = False
         self.ws = None
         self.task: asyncio.Task | None = None
@@ -91,6 +94,7 @@ class PrivateUserStream:
                     self._connected_once = True
 
                     await self._login(ws)
+                    await self._emit_activity("private_user", "login")
                     await ws.send(
                         json.dumps(
                             {
@@ -102,30 +106,37 @@ class PrivateUserStream:
                             }
                         )
                     )
+                    await self._emit_activity("private_user", "subscribe")
                     await self._emit_status(True)
 
                     while self.running:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=self.RECV_TIMEOUT_SECONDS)
                         except asyncio.TimeoutError:
-                            await ws.send("ping")
-                            continue
+                            raise ConnectionError(
+                                f"No data received from private_user in {self.RECV_TIMEOUT_SECONDS}s"
+                            ) from None
                         if raw == "pong":
+                            await self._emit_activity("private_user", "pong")
                             continue
                         data = json.loads(raw)
                         if data.get("event") in {"login", "subscribe", "unsubscribe"}:
+                            await self._emit_activity("private_user", str(data.get("event") or "event"))
                             continue
                         request_id = str(data.get("id") or "")
                         if request_id:
                             future = self._request_futures.pop(request_id, None)
                             if future and not future.done():
                                 future.set_result(data)
+                                await self._emit_activity("private_user", "request")
                                 continue
                         channel = data.get("arg", {}).get("channel")
                         if channel == "orders":
+                            await self._emit_activity("private_user", "orders")
                             for item in data.get("data", []):
                                 await self.on_order(item)
                         elif channel == "account":
+                            await self._emit_activity("private_user", "account")
                             for item in data.get("data", []):
                                 await self.on_account(item)
             except Exception as exc:
@@ -160,6 +171,10 @@ class PrivateUserStream:
     async def _emit_status(self, connected: bool) -> None:
         if self.on_status:
             await self.on_status("private_user", connected)
+
+    async def _emit_activity(self, stream_name: str, activity: str) -> None:
+        if self.on_activity:
+            await self.on_activity(stream_name, activity)
 
     @staticmethod
     def _trade_identifier_payload(*, inst_id: str, inst_id_code: str | None = None) -> dict[str, str]:

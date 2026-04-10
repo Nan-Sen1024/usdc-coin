@@ -3,6 +3,7 @@ import contextlib
 from decimal import Decimal
 import json
 from pathlib import Path
+import sqlite3
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -73,6 +74,108 @@ def test_public_reconnect_resyncs_without_immediate_cancel(tmp_path):
             "configured_cancel_on_public_reconnect": False,
         },
     ) in bot.journal.events
+
+
+def test_private_account_update_refreshes_stream_activity(tmp_path):
+    config = BotConfig(mode="live")
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+
+    bot = TrendBot6(config)
+    previous_activity_ms = now_ms() - 60_000
+    bot.state.mark_stream_activity("private_user", previous_activity_ms)
+
+    try:
+        asyncio.run(
+            bot._on_account(
+                {
+                    "details": [
+                        {
+                            "ccy": "USDC",
+                            "cashBal": "10",
+                            "availBal": "10",
+                        }
+                    ]
+                }
+            )
+        )
+    finally:
+        asyncio.run(bot.rest.close())
+        bot.audit_store.close()
+
+    assert bot.state.stream_last_activity_ms["private_user"] > previous_activity_ms
+
+
+def test_profit_density_window_prefers_sqlite_over_journal_scan(tmp_path):
+    config = BotConfig(mode="live")
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.live.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.live.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+
+    Path(config.telemetry.journal_path).write_text("{not-json}\n", encoding="utf-8")
+    conn = sqlite3.connect(config.telemetry.sqlite_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_ms INTEGER NOT NULL,
+                event TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                runtime_state TEXT,
+                run_id TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        payload_buy = {
+            "reason_bucket": "entry",
+            "order": {
+                "cl_ord_id": "buy-1",
+                "side": "buy",
+                "price": "1.0000",
+                "filled_size": "100",
+            },
+            "raw": {"fillPx": "1.0000"},
+        }
+        payload_sell = {
+            "reason_bucket": "entry",
+            "order": {
+                "cl_ord_id": "sell-1",
+                "side": "sell",
+                "price": "1.0001",
+                "filled_size": "100",
+            },
+            "raw": {"fillPx": "1.0001"},
+        }
+        conn.execute(
+            "INSERT INTO audit_events (ts_ms, event, payload_json) VALUES (?, ?, ?)",
+            (now_ms() - 1_000, "order_update", json.dumps(payload_buy)),
+        )
+        conn.execute(
+            "INSERT INTO audit_events (ts_ms, event, payload_json) VALUES (?, ?, ?)",
+            (now_ms(), "order_update", json.dumps(payload_sell)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    bot = TrendBot6(config)
+
+    try:
+        turnover, realized = bot._compute_profit_density_window(reason_bucket="entry", window_minutes=60)
+        by_side = bot._compute_profit_density_window_by_opening_side(reason_bucket="entry", window_minutes=60)
+    finally:
+        asyncio.run(bot.rest.close())
+        bot.audit_store.close()
+
+    assert turnover == Decimal("200.0100")
+    assert realized == Decimal("0.0100")
+    assert by_side["buy"] == (Decimal("100.0000"), Decimal("0.0100"))
+    assert by_side["sell"] == (Decimal("100.0100"), Decimal("0"))
 
 
 def test_bot_refresh_fee_uses_runtime_fee_without_zero_fee_override(tmp_path):

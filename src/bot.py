@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import sqlite3
 import traceback
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -276,6 +277,7 @@ class TrendBot6:
             on_reconnect=self._on_reconnect,
             on_status=self._on_stream_status,
             on_error=self._on_stream_error,
+            on_activity=self._on_stream_activity,
         )
 
     async def _tick(self) -> None:
@@ -847,10 +849,6 @@ class TrendBot6:
         self.state.set_rebalance_profit_density(per10k=per10k, size_factor=size_factor, extra_ticks=extra_ticks)
 
     def _compute_profit_density_window(self, *, reason_bucket: str, window_minutes: int) -> tuple[Decimal, Decimal]:
-        journal_path = Path(self.config.telemetry.journal_path)
-        if not journal_path.exists():
-            return Decimal("0"), Decimal("0")
-
         cutoff_ms = 0
         if window_minutes > 0:
             cutoff_ms = now_ms() - (int(window_minutes) * 60 * 1000)
@@ -859,69 +857,58 @@ class TrendBot6:
         realized = Decimal("0")
         lots: list[dict[str, Decimal]] = []
         prev_filled_by_order: dict[str, Decimal] = {}
-        with journal_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except Exception:
-                    continue
-                if record.get("event") != "order_update":
-                    continue
-                payload = record.get("payload") or {}
-                if str(payload.get("reason_bucket") or "") != reason_bucket:
-                    continue
-                order = payload.get("order") or {}
-                cl_ord_id = str(
-                    order.get("cl_ord_id")
-                    or order.get("clOrdId")
-                    or order.get("ord_id")
-                    or order.get("ordId")
-                    or ""
-                )
-                filled_size = Decimal(str(order.get("filled_size") or "0"))
-                previous_filled = prev_filled_by_order.get(cl_ord_id, Decimal("0")) if cl_ord_id else Decimal("0")
-                if cl_ord_id:
-                    prev_filled_by_order[cl_ord_id] = filled_size
-                fill_delta = filled_size - previous_filled
-                if fill_delta <= 0:
-                    continue
+        for record_ts_ms, payload in self._load_profit_density_order_updates(reason_bucket=reason_bucket, cutoff_ms=cutoff_ms):
+            order = payload.get("order") or {}
+            cl_ord_id = str(
+                order.get("cl_ord_id")
+                or order.get("clOrdId")
+                or order.get("ord_id")
+                or order.get("ordId")
+                or ""
+            )
+            filled_size = Decimal(str(order.get("filled_size") or "0"))
+            previous_filled = prev_filled_by_order.get(cl_ord_id, Decimal("0")) if cl_ord_id else Decimal("0")
+            if cl_ord_id:
+                prev_filled_by_order[cl_ord_id] = filled_size
+            fill_delta = filled_size - previous_filled
+            if fill_delta <= 0:
+                continue
 
-                raw = payload.get("raw") or {}
-                fill_price = Decimal(str(raw.get("fillPx") or order.get("price") or "0"))
-                side = str(order.get("side") or "")
-                if fill_price <= 0 or side not in {"buy", "sell"}:
-                    continue
+            raw = payload.get("raw") or {}
+            fill_price = Decimal(str(raw.get("fillPx") or order.get("price") or "0"))
+            side = str(order.get("side") or "")
+            if fill_price <= 0 or side not in {"buy", "sell"}:
+                continue
 
-                record_ts_ms = int(record.get("ts_ms") or 0)
-                in_window = cutoff_ms <= 0 or record_ts_ms <= 0 or record_ts_ms >= cutoff_ms
-                if in_window:
-                    turnover += fill_delta * fill_price
+            in_window = cutoff_ms <= 0 or record_ts_ms <= 0 or record_ts_ms >= cutoff_ms
+            if in_window:
+                turnover += fill_delta * fill_price
 
-                remaining = fill_delta
-                if side == "buy":
-                    while remaining > 0 and lots and lots[0]["qty"] < 0:
-                        lot = lots[0]
-                        matched = min(remaining, -lot["qty"])
-                        if in_window:
-                            realized += matched * (lot["price"] - fill_price)
-                        lot["qty"] += matched
-                        remaining -= matched
-                        if lot["qty"] == 0:
-                            lots.pop(0)
-                    if remaining > 0:
-                        lots.append({"qty": remaining, "price": fill_price})
-                else:
-                    while remaining > 0 and lots and lots[0]["qty"] > 0:
-                        lot = lots[0]
-                        matched = min(remaining, lot["qty"])
-                        if in_window:
-                            realized += matched * (fill_price - lot["price"])
-                        lot["qty"] -= matched
-                        remaining -= matched
-                        if lot["qty"] == 0:
-                            lots.pop(0)
-                    if remaining > 0:
-                        lots.append({"qty": -remaining, "price": fill_price})
+            remaining = fill_delta
+            if side == "buy":
+                while remaining > 0 and lots and lots[0]["qty"] < 0:
+                    lot = lots[0]
+                    matched = min(remaining, -lot["qty"])
+                    if in_window:
+                        realized += matched * (lot["price"] - fill_price)
+                    lot["qty"] += matched
+                    remaining -= matched
+                    if lot["qty"] == 0:
+                        lots.pop(0)
+                if remaining > 0:
+                    lots.append({"qty": remaining, "price": fill_price})
+            else:
+                while remaining > 0 and lots and lots[0]["qty"] > 0:
+                    lot = lots[0]
+                    matched = min(remaining, lot["qty"])
+                    if in_window:
+                        realized += matched * (fill_price - lot["price"])
+                    lot["qty"] -= matched
+                    remaining -= matched
+                    if lot["qty"] == 0:
+                        lots.pop(0)
+                if remaining > 0:
+                    lots.append({"qty": -remaining, "price": fill_price})
         return turnover, realized
 
     def _compute_profit_density_window_by_opening_side(
@@ -930,10 +917,7 @@ class TrendBot6:
         reason_bucket: str,
         window_minutes: int,
     ) -> dict[str, tuple[Decimal, Decimal]]:
-        journal_path = Path(self.config.telemetry.journal_path)
         empty = {"buy": (Decimal("0"), Decimal("0")), "sell": (Decimal("0"), Decimal("0"))}
-        if not journal_path.exists():
-            return empty
 
         cutoff_ms = 0
         if window_minutes > 0:
@@ -943,6 +927,98 @@ class TrendBot6:
         realized_by_side = {"buy": Decimal("0"), "sell": Decimal("0")}
         lots: list[dict[str, Decimal | str]] = []
         prev_filled_by_order: dict[str, Decimal] = {}
+        for record_ts_ms, payload in self._load_profit_density_order_updates(reason_bucket=reason_bucket, cutoff_ms=cutoff_ms):
+            order = payload.get("order") or {}
+            cl_ord_id = str(
+                order.get("cl_ord_id")
+                or order.get("clOrdId")
+                or order.get("ord_id")
+                or order.get("ordId")
+                or ""
+            )
+            filled_size = Decimal(str(order.get("filled_size") or "0"))
+            previous_filled = prev_filled_by_order.get(cl_ord_id, Decimal("0")) if cl_ord_id else Decimal("0")
+            if cl_ord_id:
+                prev_filled_by_order[cl_ord_id] = filled_size
+            fill_delta = filled_size - previous_filled
+            if fill_delta <= 0:
+                continue
+
+            raw = payload.get("raw") or {}
+            fill_price = Decimal(str(raw.get("fillPx") or order.get("price") or "0"))
+            side = str(order.get("side") or "")
+            if fill_price <= 0 or side not in {"buy", "sell"}:
+                continue
+
+            in_window = cutoff_ms <= 0 or record_ts_ms <= 0 or record_ts_ms >= cutoff_ms
+            if in_window:
+                turnover_by_side[side] += fill_delta * fill_price
+
+            remaining = fill_delta
+            if side == "buy":
+                while remaining > 0 and lots and Decimal(lots[0]["qty"]) < 0:
+                    lot = lots[0]
+                    matched = min(remaining, -Decimal(lot["qty"]))
+                    if in_window:
+                        realized_by_side[str(lot["opening_side"])] += matched * (Decimal(lot["price"]) - fill_price)
+                    lot["qty"] = Decimal(lot["qty"]) + matched
+                    remaining -= matched
+                    if Decimal(lot["qty"]) == 0:
+                        lots.pop(0)
+                if remaining > 0:
+                    lots.append({"qty": remaining, "price": fill_price, "opening_side": side})
+            else:
+                while remaining > 0 and lots and Decimal(lots[0]["qty"]) > 0:
+                    lot = lots[0]
+                    matched = min(remaining, Decimal(lot["qty"]))
+                    if in_window:
+                        realized_by_side[str(lot["opening_side"])] += matched * (fill_price - Decimal(lot["price"]))
+                    lot["qty"] = Decimal(lot["qty"]) - matched
+                    remaining -= matched
+                    if Decimal(lot["qty"]) == 0:
+                        lots.pop(0)
+                if remaining > 0:
+                    lots.append({"qty": -remaining, "price": fill_price, "opening_side": side})
+
+        return {
+            "buy": (turnover_by_side["buy"], realized_by_side["buy"]),
+            "sell": (turnover_by_side["sell"], realized_by_side["sell"]),
+        }
+
+    def _load_profit_density_order_updates(
+        self,
+        *,
+        reason_bucket: str,
+        cutoff_ms: int,
+    ) -> list[tuple[int, dict[str, object]]]:
+        sqlite_path = Path(self.config.telemetry.sqlite_path)
+        if sqlite_path.exists():
+            conn = sqlite3.connect(str(sqlite_path))
+            try:
+                sql = "SELECT ts_ms, payload_json FROM audit_events WHERE event = ?"
+                params: list[object] = ["order_update"]
+                if cutoff_ms > 0:
+                    sql += " AND ts_ms >= ?"
+                    params.append(int(cutoff_ms))
+                sql += " ORDER BY id"
+                rows = conn.execute(sql, params).fetchall()
+            finally:
+                conn.close()
+            updates: list[tuple[int, dict[str, object]]] = []
+            for ts_ms, payload_json in rows:
+                try:
+                    payload = json.loads(payload_json)
+                except Exception:
+                    continue
+                if str((payload or {}).get("reason_bucket") or "") != reason_bucket:
+                    continue
+                updates.append((int(ts_ms), payload))
+            return updates
+
+        journal_path = Path(self.config.telemetry.journal_path)
+        if not journal_path.exists():
+            return []
+        updates: list[tuple[int, dict[str, object]]] = []
         with journal_path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 try:
@@ -954,63 +1030,11 @@ class TrendBot6:
                 payload = record.get("payload") or {}
                 if str(payload.get("reason_bucket") or "") != reason_bucket:
                     continue
-                order = payload.get("order") or {}
-                cl_ord_id = str(
-                    order.get("cl_ord_id")
-                    or order.get("clOrdId")
-                    or order.get("ord_id")
-                    or order.get("ordId")
-                    or ""
-                )
-                filled_size = Decimal(str(order.get("filled_size") or "0"))
-                previous_filled = prev_filled_by_order.get(cl_ord_id, Decimal("0")) if cl_ord_id else Decimal("0")
-                if cl_ord_id:
-                    prev_filled_by_order[cl_ord_id] = filled_size
-                fill_delta = filled_size - previous_filled
-                if fill_delta <= 0:
-                    continue
-
-                raw = payload.get("raw") or {}
-                fill_price = Decimal(str(raw.get("fillPx") or order.get("price") or "0"))
-                side = str(order.get("side") or "")
-                if fill_price <= 0 or side not in {"buy", "sell"}:
-                    continue
-
                 record_ts_ms = int(record.get("ts_ms") or 0)
-                in_window = cutoff_ms <= 0 or record_ts_ms <= 0 or record_ts_ms >= cutoff_ms
-                if in_window:
-                    turnover_by_side[side] += fill_delta * fill_price
-
-                remaining = fill_delta
-                if side == "buy":
-                    while remaining > 0 and lots and Decimal(lots[0]["qty"]) < 0:
-                        lot = lots[0]
-                        matched = min(remaining, -Decimal(lot["qty"]))
-                        if in_window:
-                            realized_by_side[str(lot["opening_side"])] += matched * (Decimal(lot["price"]) - fill_price)
-                        lot["qty"] = Decimal(lot["qty"]) + matched
-                        remaining -= matched
-                        if Decimal(lot["qty"]) == 0:
-                            lots.pop(0)
-                    if remaining > 0:
-                        lots.append({"qty": remaining, "price": fill_price, "opening_side": side})
-                else:
-                    while remaining > 0 and lots and Decimal(lots[0]["qty"]) > 0:
-                        lot = lots[0]
-                        matched = min(remaining, Decimal(lot["qty"]))
-                        if in_window:
-                            realized_by_side[str(lot["opening_side"])] += matched * (fill_price - Decimal(lot["price"]))
-                        lot["qty"] = Decimal(lot["qty"]) - matched
-                        remaining -= matched
-                        if Decimal(lot["qty"]) == 0:
-                            lots.pop(0)
-                    if remaining > 0:
-                        lots.append({"qty": -remaining, "price": fill_price, "opening_side": side})
-
-        return {
-            "buy": (turnover_by_side["buy"], realized_by_side["buy"]),
-            "sell": (turnover_by_side["sell"], realized_by_side["sell"]),
-        }
+                if cutoff_ms > 0 and record_ts_ms > 0 and record_ts_ms < cutoff_ms:
+                    continue
+                updates.append((record_ts_ms, payload))
+        return updates
 
     def _entry_profit_density_size_factor_for_per10k(self, per10k: Decimal) -> Decimal:
         if per10k <= self.config.strategy.entry_profit_density_hard_per10k:
@@ -1168,6 +1192,7 @@ class TrendBot6:
             await self.shadow_simulator.on_trade(trade)
 
     async def _on_order(self, payload: dict) -> None:
+        self.state.mark_stream_activity("private_user")
         normalized = dict(payload)
         inst_id = str(normalized.get("instId") or "")
         if inst_id and inst_id != self.config.trading.inst_id:
@@ -1245,6 +1270,7 @@ class TrendBot6:
         await self.executor._cancel_order(order, reason="reprice_or_ttl", ignore_cooldown=True)
 
     async def _on_account(self, payload: dict) -> None:
+        self.state.mark_stream_activity("private_user")
         self.state.apply_account_update(payload)
         self.journal.append("account_update", payload)
 

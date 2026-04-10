@@ -881,6 +881,44 @@ def test_strategy_blocks_entry_buy_when_profit_density_is_hard_weak_under_rebala
     assert decision.reason == "fill_rebalance_sell_only"
 
 
+def test_strategy_blocks_fresh_buy_entry_while_rebalance_sell_is_outstanding():
+    strategy = MicroMakerStrategy(
+        StrategyConfig(
+            secondary_layers_enabled=False,
+        ),
+        TradingConfig(entry_base_size=Decimal("10000")),
+    )
+    state = build_state("50000", "50000")
+    cl_ord_id = build_cl_ord_id("bot6", "buy")
+    state.apply_order_update(
+        {
+            "instId": "USDC-USDT",
+            "side": "buy",
+            "ordId": "1",
+            "clOrdId": cl_ord_id,
+            "px": "1",
+            "fillPx": "1",
+            "sz": "10000",
+            "accFillSz": "10000",
+            "state": "filled",
+            "cTime": "1",
+            "uTime": "2",
+        },
+        source="test",
+    )
+
+    decision = strategy.decide(
+        state,
+        RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
+    )
+
+    assert decision.bid is None
+    assert decision.ask is not None
+    assert decision.ask.reason == "rebalance_open_long"
+    assert decision.ask.base_size == Decimal("10000")
+    assert decision.reason == "fill_rebalance_sell_only"
+
+
 def test_strategy_keeps_entry_size_when_profit_density_is_healthy():
     strategy = MicroMakerStrategy(
         StrategyConfig(
@@ -3596,7 +3634,7 @@ def test_strategy_sell_drought_guard_suppresses_entry_buy_and_keeps_rebalance_se
     assert decision.reason == "sell_drought_rebalance_sell_only"
 
 
-def test_strategy_sell_drought_guard_does_not_block_recent_rebalance_sell(monkeypatch):
+def test_strategy_recent_rebalance_sell_keeps_rebalance_sell_without_reopening_buy_entry(monkeypatch):
     monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_000_030_000)
     strategy = MicroMakerStrategy(
         StrategyConfig(
@@ -3652,9 +3690,10 @@ def test_strategy_sell_drought_guard_does_not_block_recent_rebalance_sell(monkey
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is not None
-    assert decision.bid.reason == "join_best_bid"
+    assert decision.bid is None
     assert decision.ask is not None
+    assert decision.ask.reason == "rebalance_open_long"
+    assert decision.reason == "fill_rebalance_sell_only"
 
 
 def test_strategy_buy_drought_guard_suppresses_entry_sell_and_keeps_rebalance_buy(monkeypatch):

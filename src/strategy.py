@@ -180,6 +180,7 @@ class MicroMakerStrategy:
                 )
             elif (
                 not bid_toxic_cooldown
+                and rebalance_sell_base <= 0
                 and not sell_drought_guard_active
                 and not self._entry_suppressed_by_tight_spread_quality(
                     state=state,
