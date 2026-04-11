@@ -1340,6 +1340,105 @@ def test_binance_bootstrap_refreshes_pending_orders_after_startup_cleanup(monkey
     assert bot.state.live_orders == {}
 
 
+def test_okx_bootstrap_reconciles_startup_cleanup_until_pending_orders_clear(monkeypatch, tmp_path):
+    config = BotConfig(mode="live")
+    config.exchange.name = "okx"
+    config.telemetry.sqlite_enabled = False
+    config.telemetry.journal_path = str(tmp_path / "journal.jsonl")
+    config.telemetry.sqlite_path = str(tmp_path / "audit.db")
+    config.telemetry.state_path = str(tmp_path / "state.json")
+    config.telemetry.stop_request_path = str(tmp_path / "stop.request")
+
+    bot = TrendBot6(config)
+    bot.journal = StubJournal()
+    pending_calls = {"count": 0}
+    cancel_calls: list[str] = []
+    sleep_calls: list[float] = []
+    sell_id = build_cl_ord_id(config.managed_prefix, "sell")
+
+    async def fake_sync_time_offset():
+        return None
+
+    async def fake_fetch_instrument(inst_id: str, inst_type: str):
+        return InstrumentMeta(
+            inst_id=inst_id,
+            inst_type=inst_type,
+            base_ccy="USDC",
+            quote_ccy="USDT",
+            tick_size=Decimal("0.0001"),
+            lot_size=Decimal("0.000001"),
+            min_size=Decimal("1"),
+            max_market_amount=Decimal("1000000"),
+            max_limit_amount=Decimal("20000000"),
+            inst_id_code="648",
+            state="live",
+        )
+
+    async def fake_fetch_order_book(inst_id: str, depth: int):
+        return make_book(bid="1.0000", ask="1.0001", ts_ms=1)
+
+    async def fake_fetch_balances(ccys):
+        return {
+            "USDC": Balance(ccy="USDC", total=Decimal("10000"), available=Decimal("10000")),
+            "USDT": Balance(ccy="USDT", total=Decimal("10000"), available=Decimal("10000")),
+        }
+
+    async def fake_fetch_trade_fee(inst_type: str, inst_id: str):
+        return {"maker": Decimal("0"), "taker": Decimal("0"), "feeType": ""}
+
+    async def fake_list_pending_orders(inst_id: str, inst_type: str):
+        pending_calls["count"] += 1
+        if pending_calls["count"] < 3:
+            return [
+                {
+                    "instId": inst_id,
+                    "side": "sell",
+                    "ordId": "s1",
+                    "clOrdId": sell_id,
+                    "px": "1.0002",
+                    "sz": "500",
+                    "accFillSz": "0",
+                    "state": "live",
+                    "cTime": "1",
+                    "uTime": "1",
+                }
+            ]
+        return []
+
+    async def fake_cancel_order(*, inst_id: str, ord_id: str | None = None, cl_ord_id: str | None = None, req_id: str | None = None, inst_id_code: str | None = None):
+        del inst_id, ord_id, req_id, inst_id_code
+        cancel_calls.append(str(cl_ord_id or ""))
+        return {}
+
+    async def fake_stream_start(self):
+        return None
+
+    async def fake_sleep(delay: float):
+        sleep_calls.append(delay)
+
+    bot.rest.sync_time_offset = fake_sync_time_offset  # type: ignore[method-assign]
+    bot.rest.fetch_instrument = fake_fetch_instrument  # type: ignore[method-assign]
+    bot.rest.fetch_order_book = fake_fetch_order_book  # type: ignore[method-assign]
+    bot.rest.fetch_balances = fake_fetch_balances  # type: ignore[method-assign]
+    bot.rest.fetch_trade_fee = fake_fetch_trade_fee  # type: ignore[method-assign]
+    bot.rest.list_pending_orders = fake_list_pending_orders  # type: ignore[method-assign]
+    bot.rest.cancel_order = fake_cancel_order  # type: ignore[method-assign]
+    monkeypatch.setattr("src.market_data.PublicBookStream.start", fake_stream_start)
+    monkeypatch.setattr("src.private_stream.PrivateUserStream.start", fake_stream_start)
+    monkeypatch.setattr("src.executor.asyncio.sleep", fake_sleep)
+
+    try:
+        asyncio.run(bot._bootstrap())
+    finally:
+        asyncio.run(bot.rest.close())
+        bot.audit_store.close()
+
+    assert cancel_calls == [sell_id]
+    assert pending_calls["count"] == 3
+    assert sleep_calls == [0.2]
+    assert bot.state.live_orders == {}
+
+
 def test_binance_bootstrap_cleans_managed_orders_before_budget_gate_blocks(monkeypatch, tmp_path):
     config = BotConfig(mode="live")
     config.exchange.name = "binance"

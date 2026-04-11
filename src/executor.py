@@ -93,11 +93,22 @@ class OrderExecutor:
             fail_on_foreign=self.config.risk.fail_on_foreign_pending_orders,
             cancel_managed=self.config.risk.cancel_managed_orders_on_startup,
         )
-        if self.config.exchange.name == "binance" and self.config.risk.cancel_managed_orders_on_startup:
-            await self.reload_pending_orders()
+        if self.config.risk.cancel_managed_orders_on_startup:
+            await self._wait_for_startup_cleanup_reconciliation()
 
     async def reload_pending_orders(self) -> None:
         await self._sync_pending_orders(fail_on_foreign=False, cancel_managed=False)
+
+    async def _wait_for_startup_cleanup_reconciliation(self) -> None:
+        """Reconcile local order state against exchange truth before streams come online."""
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while True:
+            await self.reload_pending_orders()
+            if not any(order.cancel_requested for order in self.state.bot_orders()):
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                return
+            await asyncio.sleep(0.2)
 
     async def reconcile(self, decision: QuoteDecision, risk_status: RiskStatus | None = None) -> None:
         if await self._try_batch_cross_side_amend(decision, risk_status=risk_status):
