@@ -182,17 +182,6 @@ class MicroMakerStrategy:
                 not bid_toxic_cooldown
                 and rebalance_sell_base <= 0
                 and not sell_drought_guard_active
-                and not self._entry_suppressed_by_tight_spread_quality(
-                    state=state,
-                    side="buy",
-                    spread_ticks=spread_ticks,
-                )
-                and not self._entry_blocked_by_weak_density(
-                    state=state,
-                    side="buy",
-                    rebalance_buy_base=rebalance_buy_base,
-                    rebalance_sell_base=rebalance_sell_base,
-                )
             ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
@@ -250,17 +239,6 @@ class MicroMakerStrategy:
                 not ask_toxic_cooldown
                 and rebalance_buy_base <= 0
                 and not buy_drought_guard_active
-                and not self._entry_suppressed_by_tight_spread_quality(
-                    state=state,
-                    side="sell",
-                    spread_ticks=spread_ticks,
-                )
-                and not self._entry_blocked_by_weak_density(
-                    state=state,
-                    side="sell",
-                    rebalance_buy_base=rebalance_buy_base,
-                    rebalance_sell_base=rebalance_sell_base,
-                )
             ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
@@ -301,12 +279,6 @@ class MicroMakerStrategy:
                 reason = "buy_drought_rebalance_buy_only" if rebalance_buy_base > 0 else "buy_drought_bid_only"
             elif rebalance_buy_base > 0:
                 reason = "fill_rebalance_buy_only"
-            elif self._entry_suppressed_by_tight_spread_quality(
-                state=state,
-                side="sell",
-                spread_ticks=spread_ticks,
-            ):
-                reason = "entry_quality_bid_only"
             elif favorable_entry_regime_active and bid.reason == "join_best_bid":
                 reason = "favorable_bid_only"
             else:
@@ -316,12 +288,6 @@ class MicroMakerStrategy:
                 reason = "sell_drought_rebalance_sell_only" if rebalance_sell_base > 0 else "sell_drought_ask_only"
             elif rebalance_sell_base > 0:
                 reason = "fill_rebalance_sell_only"
-            elif self._entry_suppressed_by_tight_spread_quality(
-                state=state,
-                side="buy",
-                spread_ticks=spread_ticks,
-            ):
-                reason = "entry_quality_ask_only"
             elif favorable_entry_regime_active and ask.reason == "join_best_ask":
                 reason = "favorable_ask_only"
             else:
@@ -329,19 +295,6 @@ class MicroMakerStrategy:
         elif not bid and not ask:
             if suppress_direct_sell_for_route:
                 reason = "route_indirect_release_only"
-            elif (
-                self._entry_suppressed_by_tight_spread_quality(
-                    state=state,
-                    side="buy",
-                    spread_ticks=spread_ticks,
-                )
-                and self._entry_suppressed_by_tight_spread_quality(
-                    state=state,
-                    side="sell",
-                    spread_ticks=spread_ticks,
-                )
-            ):
-                reason = "entry_quality_do_not_quote"
             else:
                 reason = risk_status.reason
 
@@ -601,39 +554,6 @@ class MicroMakerStrategy:
     def _entry_quality_is_weak(self, *, state: BotState, side: str) -> bool:
         return self._entry_quality_factor(state=state, side=side) < Decimal("1")
 
-    def _entry_suppressed_by_tight_spread_quality(
-        self,
-        *,
-        state: BotState,
-        side: str,
-        spread_ticks: Decimal,
-    ) -> bool:
-        return spread_ticks <= Decimal("1") and self._entry_quality_is_weak(state=state, side=side)
-
-    def _entry_hard_density_block_active(self, *, state: BotState, side: str) -> bool:
-        if not self.config.entry_profit_density_enabled:
-            return False
-        per10k = state.entry_profit_density_per10k_for_side(side)
-        if per10k is None:
-            return False
-        return per10k <= self.config.entry_profit_density_hard_per10k
-
-    def _entry_blocked_by_weak_density(
-        self,
-        *,
-        state: BotState,
-        side: str,
-        rebalance_buy_base: Decimal,
-        rebalance_sell_base: Decimal,
-    ) -> bool:
-        if not self._entry_hard_density_block_active(state=state, side=side):
-            return False
-        if side == "buy":
-            return rebalance_sell_base > 0
-        if side == "sell":
-            return rebalance_buy_base > 0
-        return False
-
     def _favorable_entry_regime_active(
         self,
         *,
@@ -791,12 +711,7 @@ class MicroMakerStrategy:
                         reason="rebalance_open_short",
                         base_size=bid_base_size,
                     )
-            elif not self._entry_blocked_by_weak_density(
-                state=state,
-                side="buy",
-                rebalance_buy_base=rebalance_buy_base,
-                rebalance_sell_base=rebalance_sell_base,
-            ):
+            else:
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=fixed_entry_base_size,
@@ -839,12 +754,7 @@ class MicroMakerStrategy:
                         reason="rebalance_open_long",
                         base_size=ask_base_size,
                     )
-            elif not self._entry_blocked_by_weak_density(
-                state=state,
-                side="sell",
-                rebalance_buy_base=rebalance_buy_base,
-                rebalance_sell_base=rebalance_sell_base,
-            ):
+            else:
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(
                     state=state,
                     base_size=fixed_entry_base_size,

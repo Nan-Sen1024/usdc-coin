@@ -235,7 +235,7 @@ def test_strategy_scales_entry_size_only_when_spread_is_favorable():
     assert decision.ask_layers[1].base_size == Decimal("7500")
 
 
-def test_strategy_blocks_fresh_entry_when_one_tick_spread_and_entry_quality_is_weak():
+def test_strategy_scales_fresh_entry_when_one_tick_spread_and_entry_quality_is_weak():
     strategy = MicroMakerStrategy(
         StrategyConfig(
             entry_profit_density_enabled=True,
@@ -255,12 +255,14 @@ def test_strategy_blocks_fresh_entry_when_one_tick_spread_and_entry_quality_is_w
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
-    assert decision.ask is None
-    assert decision.reason == "entry_quality_do_not_quote"
+    assert decision.bid is not None
+    assert decision.ask is not None
+    assert decision.bid.base_size == Decimal("4000")
+    assert decision.ask.base_size == Decimal("4000")
+    assert decision.reason == "two_sided"
 
 
-def test_strategy_uses_side_specific_entry_density_to_keep_good_side_live():
+def test_strategy_uses_side_specific_entry_density_to_size_down_only_the_weak_side():
     strategy = MicroMakerStrategy(
         StrategyConfig(
             entry_profit_density_enabled=True,
@@ -282,10 +284,11 @@ def test_strategy_uses_side_specific_entry_density_to_keep_good_side_live():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
+    assert decision.bid is not None
     assert decision.ask is not None
+    assert decision.bid.base_size == Decimal("4000")
     assert decision.ask.base_size == Decimal("10000")
-    assert decision.reason == "entry_quality_ask_only"
+    assert decision.reason == "two_sided"
 
 
 def test_strategy_does_not_scale_entry_size_when_spread_is_one_tick():
@@ -805,13 +808,14 @@ def test_strategy_scales_down_buy_entry_when_recent_buy_markout_is_adverse():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
+    assert decision.bid is not None
     assert decision.ask is not None
+    assert decision.bid.base_size == Decimal("5000")
     assert decision.ask.base_size == Decimal("10000")
-    assert decision.reason == "entry_quality_ask_only"
+    assert decision.reason == "two_sided"
 
 
-def test_strategy_blocks_entry_when_profit_density_is_weak_on_one_tick_spread():
+def test_strategy_scales_entry_when_profit_density_is_weak_on_one_tick_spread():
     strategy = MicroMakerStrategy(
         StrategyConfig(
             entry_profit_density_enabled=True,
@@ -831,9 +835,11 @@ def test_strategy_blocks_entry_when_profit_density_is_weak_on_one_tick_spread():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
-    assert decision.ask is None
-    assert decision.reason == "entry_quality_do_not_quote"
+    assert decision.bid is not None
+    assert decision.ask is not None
+    assert decision.bid.base_size == Decimal("4000")
+    assert decision.ask.base_size == Decimal("4000")
+    assert decision.reason == "two_sided"
 
 
 def test_strategy_blocks_entry_buy_when_profit_density_is_hard_weak_under_rebalance_sell_pressure():
