@@ -842,7 +842,7 @@ def test_strategy_scales_entry_when_profit_density_is_weak_on_one_tick_spread():
     assert decision.reason == "two_sided"
 
 
-def test_strategy_blocks_entry_buy_when_profit_density_is_hard_weak_under_rebalance_sell_pressure():
+def test_strategy_keeps_entry_buy_live_when_profit_density_is_hard_weak_under_rebalance_sell_pressure():
     strategy = MicroMakerStrategy(
         StrategyConfig(
             secondary_layers_enabled=False,
@@ -880,14 +880,16 @@ def test_strategy_blocks_entry_buy_when_profit_density_is_hard_weak_under_rebala
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
+    assert decision.bid is not None
     assert decision.ask is not None
+    assert decision.bid.reason == "join_best_bid"
+    assert decision.bid.base_size == Decimal("2000.0000")
     assert decision.ask.reason == "rebalance_open_long"
     assert decision.ask.base_size == Decimal("10000")
-    assert decision.reason == "fill_rebalance_sell_only"
+    assert decision.reason == "fill_rebalance_sell_biased"
 
 
-def test_strategy_blocks_fresh_buy_entry_while_rebalance_sell_is_outstanding():
+def test_strategy_keeps_fresh_buy_entry_live_while_rebalance_sell_is_outstanding():
     strategy = MicroMakerStrategy(
         StrategyConfig(
             secondary_layers_enabled=False,
@@ -918,11 +920,13 @@ def test_strategy_blocks_fresh_buy_entry_while_rebalance_sell_is_outstanding():
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
+    assert decision.bid is not None
     assert decision.ask is not None
+    assert decision.bid.reason == "join_best_bid"
+    assert decision.bid.base_size == Decimal("5000.00")
     assert decision.ask.reason == "rebalance_open_long"
     assert decision.ask.base_size == Decimal("10000")
-    assert decision.reason == "fill_rebalance_sell_only"
+    assert decision.reason == "fill_rebalance_sell_biased"
 
 
 def test_strategy_keeps_entry_size_when_profit_density_is_healthy():
@@ -3640,7 +3644,7 @@ def test_strategy_sell_drought_guard_suppresses_entry_buy_and_keeps_rebalance_se
     assert decision.reason == "sell_drought_rebalance_sell_only"
 
 
-def test_strategy_recent_rebalance_sell_keeps_rebalance_sell_without_reopening_buy_entry(monkeypatch):
+def test_strategy_recent_rebalance_sell_keeps_rebalance_sell_with_reduced_buy_entry(monkeypatch):
     monkeypatch.setattr("src.strategy.now_ms", lambda: 1_700_000_030_000)
     strategy = MicroMakerStrategy(
         StrategyConfig(
@@ -3696,10 +3700,12 @@ def test_strategy_recent_rebalance_sell_keeps_rebalance_sell_without_reopening_b
         RiskStatus(ok=True, reason="ok", allow_bid=True, allow_ask=True),
     )
 
-    assert decision.bid is None
+    assert decision.bid is not None
+    assert decision.bid.reason == "join_best_bid"
+    assert decision.bid.base_size == Decimal("500.00")
     assert decision.ask is not None
     assert decision.ask.reason == "rebalance_open_long"
-    assert decision.reason == "fill_rebalance_sell_only"
+    assert decision.reason == "fill_rebalance_sell_biased"
 
 
 def test_strategy_buy_drought_guard_suppresses_entry_sell_and_keeps_rebalance_buy(monkeypatch):

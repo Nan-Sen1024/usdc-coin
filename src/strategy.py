@@ -180,7 +180,6 @@ class MicroMakerStrategy:
                 )
             elif (
                 not bid_toxic_cooldown
-                and rebalance_sell_base <= 0
                 and not sell_drought_guard_active
             ):
                 entry_base_size, entry_quote_size = self._apply_entry_size_factor(

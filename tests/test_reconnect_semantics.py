@@ -9,6 +9,8 @@ from src.bot import TrendBot6
 from src.config import BotConfig, RiskConfig, TradingConfig
 from src.executor import OrderExecutor
 from src.models import Balance, BookLevel, BookSnapshot, InstrumentMeta, LiveOrder, RiskStatus
+from src.okx_auth import OKXSigner
+from src.private_stream import PrivateUserStream
 from src.state import BotState
 from src.utils import now_ms
 
@@ -30,6 +32,10 @@ class StubRest:
 
     async def close(self):
         return None
+
+
+async def _noop_private_payload(payload):
+    del payload
 
 
 def make_state() -> BotState:
@@ -166,6 +172,22 @@ def test_private_reconnect_always_cancels_managed_orders(tmp_path):
             "cancel_reason": "private_reconnect",
         },
     ) in bot.journal.events
+
+
+def test_executor_falls_back_to_rest_when_private_ws_is_not_authenticated():
+    executor, _ = make_executor()
+    stream = PrivateUserStream(
+        url="wss://example.invalid/ws/private",
+        signer=OKXSigner(api_key="k", secret_key="s", passphrase="p"),
+        time_offset_ms=0,
+        inst_type="SPOT",
+        on_order=_noop_private_payload,
+        on_account=_noop_private_payload,
+    )
+    stream.ws = object()
+    executor.attach_trade_client(stream)
+
+    assert executor._trade_client() is executor.rest
 
 
 def test_risk_blocks_stale_private_stream_in_live_mode():

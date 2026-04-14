@@ -57,6 +57,7 @@ class PrivateUserStream:
         self._connected_once = False
         self._send_lock = asyncio.Lock()
         self._request_futures: dict[str, asyncio.Future] = {}
+        self._authenticated = False
 
     async def start(self) -> None:
         if self.task:
@@ -66,6 +67,7 @@ class PrivateUserStream:
 
     async def stop(self) -> None:
         self.running = False
+        self._authenticated = False
         await self._emit_status(False)
         if self.ws:
             await self.ws.close()
@@ -80,7 +82,7 @@ class PrivateUserStream:
         self.task = None
 
     def trade_ready(self) -> bool:
-        return self.ws is not None
+        return self.ws is not None and self._authenticated
 
     async def _run(self) -> None:
         while self.running:
@@ -88,12 +90,14 @@ class PrivateUserStream:
             try:
                 async with websockets.connect(self.url, ping_interval=None, close_timeout=5) as ws:
                     self.ws = ws
+                    self._authenticated = False
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
                     if self._connected_once and self.on_reconnect:
                         await self.on_reconnect("private_user")
                     self._connected_once = True
 
                     await self._login(ws)
+                    self._authenticated = True
                     await self._emit_activity("private_user", "login")
                     await ws.send(
                         json.dumps(
@@ -146,6 +150,7 @@ class PrivateUserStream:
                 logger.warning("Private user stream reconnecting: %s", exc)
                 await asyncio.sleep(1)
             finally:
+                self._authenticated = False
                 if heartbeat_task:
                     heartbeat_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):

@@ -52,6 +52,10 @@ async def _noop_order(payload):
     del payload
 
 
+async def _noop_account(payload):
+    del payload
+
+
 def test_okx_public_stream_reconnects_on_recv_timeout(monkeypatch):
     ws = FakeWebSocket(["__block__"])
     statuses: list[tuple[str, bool]] = []
@@ -151,3 +155,49 @@ def test_okx_private_stream_emits_activity_on_pong_and_account(monkeypatch):
     assert accounts
     assert ("private_user", "pong") in activities
     assert ("private_user", "account") in activities
+
+
+def test_okx_private_stream_not_trade_ready_during_reconnect_callback(monkeypatch):
+    first_ws = FakeWebSocket([json.dumps({"event": "login", "code": "0"}), "__block__"])
+    second_ws = FakeWebSocket([json.dumps({"event": "login", "code": "0"})])
+    sockets = iter([first_ws, second_ws])
+    ready_states: list[bool] = []
+    errors: list[str] = []
+
+    stream: PrivateUserStream | None = None
+
+    async def on_reconnect(stream_name: str) -> None:
+        assert stream_name == "private_user"
+        assert stream is not None
+        ready_states.append(stream.trade_ready())
+        stream.running = False
+
+    async def on_error(stream_name: str, exc: Exception) -> None:
+        assert stream_name == "private_user"
+        errors.append(str(exc))
+
+    signer = OKXSigner(api_key="k", secret_key="s", passphrase="p")
+    stream = PrivateUserStream(
+        url="wss://example.invalid/ws/private",
+        signer=signer,
+        time_offset_ms=0,
+        inst_type="SPOT",
+        on_order=_noop_order,
+        on_account=_noop_account,
+        on_reconnect=on_reconnect,
+        on_error=on_error,
+    )
+    stream.HEARTBEAT_INTERVAL_SECONDS = 3600.0
+    stream.RECV_TIMEOUT_SECONDS = 0.01
+
+    monkeypatch.setattr("src.private_stream.websockets.connect", lambda *args, **kwargs: FakeConnect(next(sockets)))
+
+    async def run() -> None:
+        await stream.start()
+        await asyncio.sleep(1.2)
+        await stream.stop()
+
+    asyncio.run(run())
+
+    assert ready_states == [False]
+    assert any("No data received from private_user" in error for error in errors)
